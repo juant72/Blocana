@@ -1,0 +1,50 @@
+[package]
+name = "blocana"
+version = "0.1.0"
+edition = "2021"
+authors = ["Encrypia Labs"]
+description = "A lightweight blockchain optimized for resource-constrained environments"
+
+# Library configuration
+[lib]
+name = "blocana"
+path = "src/lib.rs"
+
+# Binary configuration
+[[bin]]
+name = "blocana"
+path = "src/bin/main.rs"
+
+[dependencies]
+# Core dependencies
+rand = "0.8.5"
+log = "0.4.17"
+env_logger = "0.10.0"
+clap = "3.2.22"
+serde = { version = "1.0.152", features = ["derive"] }
+serde_json = "1.0.91"
+
+# Crypto
+sha2 = "0.10.6"
+ed25519-dalek = "1.0.1"
+
+# Networking - versión simplificada sin Protocol Buffers
+# Usamos una versión anterior de libp2p que no requiere protoc
+libp2p = { version = "0.39.1", default-features = false, features = ["tokio", "tcp", "noise", "mplex", "yamux", "dns"] }
+tokio = { version = "1.25.0", features = ["full"] }
+
+# Storage
+sled = "0.34.7"
+
+# WASM (optional)
+wasmer = { version = "3.1.1", optional = true }
+
+[features]
+default = []
+smart-contracts = ["wasmer"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+panic = "abort"
