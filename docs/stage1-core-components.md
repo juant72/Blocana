@@ -284,3 +284,5 @@ For those interested in diving deeper into these concepts:
 - "Cryptography Engineering" by Ferguson, Schneier, and Kohno (for cryptographic foundations)
 - The SledDB documentation (for storage specifics)
 - Ed25519 paper by Daniel J. Bernstein et al. (for signature algorithm details)
+
+--- End of Document ---
