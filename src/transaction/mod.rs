@@ -2,6 +2,9 @@
 //!
 //! This module contains transaction structures and related functionality.
 
+mod pool;
+
+pub use pool::{TransactionPool, TransactionPoolConfig};
 use crate::block::Hash;
 
 /// Transaction structure
@@ -48,7 +51,7 @@ impl Transaction {
     }
     
     /// Sign the transaction with the given private key
-    pub fn sign(&mut self, private_key: &[u8; 32]) -> Result<(), crate::Error> {
+    pub fn sign(&mut self, _private_key: &[u8; 32]) -> Result<(), crate::Error> {
         // Implement signing logic here
         // This is just a placeholder
         self.signature = [1u8; 64];

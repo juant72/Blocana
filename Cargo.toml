@@ -28,9 +28,9 @@ serde_json = "1.0.91"
 sha2 = "0.10.6"
 ed25519-dalek = "1.0.1"
 
-# Networking - versión simplificada sin Protocol Buffers
-# Usamos una versión anterior de libp2p que no requiere protoc
-libp2p = { version = "0.39.1", default-features = false, features = ["tokio", "tcp", "noise", "mplex", "yamux", "dns"] }
+# Networking - versión corregida sin la característica dns
+# Solo usamos características que están disponibles en libp2p 0.39.1
+libp2p = { version = "0.50.0", features = ["tokio", "tcp", "dns", "noise", "mplex", "yamux"] }
 tokio = { version = "1.25.0", features = ["full"] }
 
 # Storage

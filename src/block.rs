@@ -4,6 +4,7 @@
 
 use crate::transaction::Transaction;
 use std::time::{SystemTime, UNIX_EPOCH};
+use sha2::{Sha256, Digest};
 
 /// Hash type used throughout the blockchain
 pub type Hash = [u8; 32];
@@ -53,7 +54,7 @@ impl BlockHeader {
     }
     
     /// Sign the block header with the given private key
-    pub fn sign(&mut self, private_key: &[u8; 32]) -> Result<(), crate::Error> {
+    pub fn sign(&mut self, _private_key: &[u8; 32]) -> Result<(), crate::Error> {
         // Implement signing logic here
         // This is just a placeholder
         self.signature = [1u8; 64];
@@ -62,9 +63,33 @@ impl BlockHeader {
     
     /// Compute the hash of this block header
     pub fn hash(&self) -> Hash {
-        // Implement efficient hashing
-        // For simplicity, this is just a placeholder
-        [0u8; 32]
+        // Serialize header to bytes
+        let mut bytes = Vec::with_capacity(
+            1 + // version
+            32 + // prev_hash
+            32 + // merkle_root
+            8 + // timestamp
+            8 + // height
+            32   // validator
+        );
+        
+        // Append fields in canonical order
+        bytes.push(self.version);
+        bytes.extend_from_slice(&self.prev_hash);
+        bytes.extend_from_slice(&self.merkle_root);
+        bytes.extend_from_slice(&self.timestamp.to_le_bytes());
+        bytes.extend_from_slice(&self.height.to_le_bytes());
+        bytes.extend_from_slice(&self.validator);
+        
+        // Hash the serialized header
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let result = hasher.finalize();
+        
+        // Convert to fixed-size array
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(result.as_slice());
+        hash
     }
 }
 
@@ -160,7 +185,14 @@ fn compute_merkle_root(transactions: &[Transaction]) -> Result<Hash, crate::Erro
 
 /// Hash a pair of child hashes to create a parent hash
 fn hash_pair(left: &Hash, right: &Hash) -> Hash {
-    // Implement efficient hashing
-    // This is just a placeholder
-    [0u8; 32]
+    // Concatenate hashes and hash them together
+    let mut hasher = Sha256::new();
+    hasher.update(left);
+    hasher.update(right);
+    let result = hasher.finalize();
+    
+    // Convert to fixed-size array
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(result.as_slice());
+    hash
 }

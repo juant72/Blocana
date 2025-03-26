@@ -2,6 +2,9 @@
 //! 
 //! This library implements the core components of the Blocana blockchain.
 
+// Añadir esta línea al principio para suprimir advertencias de código muerto
+#![allow(dead_code)]
+
 pub mod block;
 pub mod consensus;
 pub mod network;
@@ -97,7 +100,81 @@ impl Blockchain {
         Ok(())
     }
     
-    // Additional methods would be implemented here
+    /// Generate a new block with pending transactions
+    pub fn generate_block(&mut self) -> Result<Block, Error> {
+        // Get the latest block hash (using a placeholder for now)
+        let previous_hash = [0u8; 32]; // In a real implementation, we'd get this from storage
+        let height = 1; // In a real implementation, we'd get the current height
+        
+        // Collect pending transactions (using empty vec for now)
+        let transactions = Vec::new(); // In a real implementation, we'd get pending transactions
+        
+        // Use the consensus mechanism to generate a block
+        let block = self.consensus.generate_block(transactions, previous_hash, height)?;
+        
+        // Store the block
+        self.storage.store_block(&block)?;
+        
+        // Broadcast the block to peers (not implemented yet)
+        println!("Generated block at height {} with {} transactions", 
+                 height, block.transactions.len());
+        
+        Ok(block)
+    }
+    
+    /// Create a new transaction
+    pub fn create_transaction(&mut self, recipient: [u8; 32], amount: u64) -> Result<(), Error> {
+        // Create dummy sender (in a real app, this would be the user's wallet)
+        let sender = [1u8; 32];
+        let fee = 1; // Minimal fee
+        let nonce = 1; // In a real app, we'd track nonces per account
+        
+        // Create the transaction
+        let mut tx = Transaction::new(
+            sender,
+            recipient,
+            amount,
+            fee,
+            nonce,
+            Vec::new(), // No data payload
+        );
+        
+        // Sign the transaction (not really implemented)
+        let dummy_private_key = [0u8; 32];
+        tx.sign(&dummy_private_key)?;
+        
+        // Add to pending transactions (not implemented yet)
+        println!("Created transaction: {} → {} (amount: {})", 
+                 hex_fmt(&sender), hex_fmt(&recipient), amount);
+        
+        Ok(())
+    }
+    
+    /// Print blockchain status
+    pub fn print_status(&self) {
+        println!("Blockchain Status:");
+        println!("  Network ID: {}", self.config.network_id);
+        println!("  Max block size: {} bytes", self.config.max_block_size);
+        println!("  Target block time: {}ms", self.config.target_block_time_ms);
+        // In a real implementation, we'd print current height, pending txs count, etc.
+    }
+    
+    /// Print connected peers
+    pub fn print_peers(&self) {
+        println!("Connected Peers:");
+        println!("  (None - P2P networking not fully implemented yet)");
+        // In a real implementation, we'd print the list of connected peers
+    }
+}
+
+/// Utility function to format byte arrays as hex strings
+fn hex_fmt(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes.iter().take(4) {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s.push_str("..."); // Truncate for readability
+    s
 }
 
 /// Error types for Blocana operations
@@ -106,9 +183,32 @@ pub enum Error {
     Storage(storage::Error),
     Network(network::Error),
     Consensus(consensus::Error),
+    VM(vm::Error),
     Validation(String),
     Configuration(String),
 }
 
 // Implement From traits for error conversion
-// ...
+impl From<storage::Error> for Error {
+    fn from(err: storage::Error) -> Self {
+        Error::Storage(err)
+    }
+}
+
+impl From<network::Error> for Error {
+    fn from(err: network::Error) -> Self {
+        Error::Network(err)
+    }
+}
+
+impl From<consensus::Error> for Error {
+    fn from(err: consensus::Error) -> Self {
+        Error::Consensus(err)
+    }
+}
+
+impl From<vm::Error> for Error {
+    fn from(err: vm::Error) -> Self {
+        Error::VM(err)
+    }
+}

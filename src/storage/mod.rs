@@ -2,6 +2,8 @@
 //!
 //! This module contains the storage layer implementation.
 
+// No necesitamos añadir #![allow(dead_code)] aquí porque lo hemos añadido a nivel de crate en lib.rs
+
 use crate::block::{Block, Hash};
 
 /// Configuration for the storage layer
@@ -79,13 +81,13 @@ impl BlockStore {
     }
     
     /// Get a block by its hash
-    pub fn get(&self, hash: &Hash) -> Result<Option<Block>, Error> {
+    pub fn get(&self, _hash: &Hash) -> Result<Option<Block>, Error> {
         // In a real implementation, we would fetch from SledDB
         Ok(None)
     }
     
     /// Store a block
-    pub fn put(&mut self, block: &Block) -> Result<(), Error> {
+    pub fn put(&mut self, _block: &Block) -> Result<(), Error> {
         // In a real implementation, we would store in SledDB
         Ok(())
     }

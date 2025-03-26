@@ -3,7 +3,7 @@
 //! A lightweight consensus mechanism optimized for performance and fairness
 
 use super::{Consensus, ConsensusConfig, Error};
-use crate::block::{Block, BlockHeader};
+use crate::block::Block;
 use crate::storage::BlockchainStorage;
 use crate::transaction::Transaction;
 use std::time::{Duration, Instant};
