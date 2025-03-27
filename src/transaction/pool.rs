@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use crate::transaction::Transaction;
-use crate::block::Hash;
+use crate::types::Hash;
 use std::time::{Instant, Duration};
 
 /// Configuration for the transaction pool
@@ -24,6 +24,23 @@ impl Default for TransactionPoolConfig {
             min_fee_per_byte: 1,
         }
     }
+}
+
+/// Error types for transaction pool operations
+#[derive(Debug)]
+pub enum PoolError {
+    /// Pool is full
+    PoolFull,
+    /// Transaction already exists in pool
+    DuplicateTransaction,
+    /// Transaction fee is too low
+    FeeTooLow,
+    /// Transaction has invalid signature
+    InvalidSignature,
+    /// Transaction has invalid format
+    InvalidFormat,
+    /// Other errors
+    Other(String),
 }
 
 /// A pool for storing pending transactions
@@ -169,21 +186,4 @@ impl TransactionPool {
     pub fn get_transaction(&self, hash: &Hash) -> Option<&Transaction> {
         self.transactions.get(hash).map(|(tx, _)| tx)
     }
-}
-
-/// Error types for transaction pool operations
-#[derive(Debug)]
-pub enum PoolError {
-    /// Pool is full
-    PoolFull,
-    /// Transaction already exists in pool
-    DuplicateTransaction,
-    /// Transaction fee is too low
-    FeeTooLow,
-    /// Transaction has invalid signature
-    InvalidSignature,
-    /// Transaction has invalid format
-    InvalidFormat,
-    /// Other errors
-    Other(String),
 }
