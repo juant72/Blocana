@@ -3,7 +3,9 @@
 //! This module provides the core cryptographic functions used in the blockchain.
 
 use sha2::{Sha256, Digest};
-use ed25519_dalek::{Keypair, Signer, Verifier, PublicKey, SecretKey};
+use ed25519_dalek::{Signer, Verifier, Signature};
+use ed25519_dalek::SigningKey;
+use ed25519_dalek::VerifyingKey;
 use rand::{rngs::OsRng, RngCore};
 use crate::types::{Hash, PublicKeyBytes, PrivateKeyBytes, SignatureBytes};
 
@@ -11,42 +13,43 @@ use crate::types::{Hash, PublicKeyBytes, PrivateKeyBytes, SignatureBytes};
 pub struct KeyPair {
     pub public_key: PublicKeyBytes,
     pub private_key: PrivateKeyBytes,
-    keypair: Keypair,
+    signing_key: SigningKey,
 }
 
 impl KeyPair {
     /// Generate a new random key pair
     pub fn generate() -> Result<Self, crate::Error> {
-        let mut csprng = OsRng{};
-        let keypair = Keypair::generate(&mut csprng);
+        // Generate random bytes for the private key
+        let mut rng = OsRng{};
+        let mut private_key_bytes = [0u8; 32];
+        rng.fill_bytes(&mut private_key_bytes);
+        
+        // Create signing key from random bytes
+        let signing_key = SigningKey::from_bytes(&private_key_bytes);
+        
+        // Derive public key
+        let verifying_key = VerifyingKey::from(&signing_key);
         
         let mut public_key = [0u8; 32];
-        let mut private_key = [0u8; 32];
-        
-        public_key.copy_from_slice(keypair.public.as_bytes());
-        private_key.copy_from_slice(keypair.secret.as_bytes());
+        public_key.copy_from_slice(verifying_key.as_bytes());
         
         Ok(Self {
             public_key,
-            private_key,
-            keypair,
+            private_key: private_key_bytes,
+            signing_key,
         })
     }
     
     /// Create a key pair from an existing private key
     pub fn from_private_key(private_key: &PrivateKeyBytes) -> Result<Self, crate::Error> {
-        // Convert to ed25519-dalek SecretKey
-        let secret = SecretKey::from_bytes(private_key)
-            .map_err(|_| crate::Error::Crypto("Invalid private key".into()))?;
+        // Convert to ed25519-dalek SecretKey - Fix for v2.x API
+        let secret = match SigningKey::try_from(private_key.as_slice()) {
+            Ok(sk) => sk,
+            Err(_) => return Err(crate::Error::Crypto("Invalid private key".into())),
+        };
         
         // Derive public key
-        let public = PublicKey::from(&secret);
-        
-        // Create keypair
-        let keypair = Keypair {
-            public,
-            secret,
-        };
+        let public = VerifyingKey::from(&secret);
         
         let mut public_key = [0u8; 32];
         let mut private_key_copy = [0u8; 32];
@@ -57,16 +60,16 @@ impl KeyPair {
         Ok(Self {
             public_key,
             private_key: private_key_copy,
-            keypair,
+            signing_key: secret,
         })
     }
     
     /// Sign a message with this key pair
     pub fn sign(&self, message: &[u8]) -> SignatureBytes {
-        let signature = self.keypair.sign(message);
+        let signature = self.signing_key.sign(message);
         
         let mut sig_bytes = [0u8; 64];
-        sig_bytes.copy_from_slice(signature.as_ref());
+        sig_bytes.copy_from_slice(signature.to_bytes().as_ref());
         
         sig_bytes
     }
@@ -125,15 +128,19 @@ pub fn verify_signature(
     message: &[u8]
 ) -> Result<(), crate::Error> {
     // Convert public key bytes to dalek PublicKey
-    let public = PublicKey::from_bytes(public_key)
-        .map_err(|_| crate::Error::Crypto("Invalid public key".into()))?;
+    let public = match VerifyingKey::try_from(public_key.as_slice()) {
+        Ok(pk) => pk,
+        Err(_) => return Err(crate::Error::Crypto("Invalid public key".into())),
+    };
     
-    // Convert signature bytes to dalek Signature
-    let sig = ed25519_dalek::Signature::from_bytes(signature)
-        .map_err(|_| crate::Error::Crypto("Invalid signature".into()))?;
+    // Convert signature bytes to dalek Signature - Fix for v2.x API
+    let sig = match ed25519_dalek::Signature::try_from(signature.as_slice()) {
+        Ok(s) => s,
+        Err(_) => return Err(crate::Error::Crypto("Invalid signature".into())),
+    };
     
     // Verify the signature
-    public.verify(message, &sig)
+    public.verify_strict(message, &sig)
         .map_err(|_| crate::Error::Crypto("Signature verification failed".into()))
 }
 

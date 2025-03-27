@@ -1,4 +1,4 @@
-use blocana::{Blockchain, BlockchainConfig}; // Quitamos Transaction ya que no se usa
+use blocana::{Blockchain, BlockchainConfig, Block, Transaction, PublicKeyBytes}; // Quitamos Transaction ya que no se usa
 use std::process;
 use std::io::{self, BufRead, Write};
 use clap::{App, Arg}; // Quitamos SubCommand ya que no se usa
@@ -60,7 +60,7 @@ fn main() {
             let blockchain_clone = blockchain.clone();
             thread::spawn(move || {
                 let mut bc = blockchain_clone.lock().unwrap();
-                if let Err(e) = bc.start() {
+                if let Err(e) = (&mut *bc).start() {
                     eprintln!("Failed to start blockchain: {:?}", e);
                     process::exit(1);
                 }

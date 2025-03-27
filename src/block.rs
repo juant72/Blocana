@@ -2,10 +2,12 @@
 //!
 //! This module contains the core block structures and related functionality.
 
+use serde_big_array::BigArray;
 use crate::transaction::Transaction;
 use crate::types::{Hash, PublicKeyBytes, SignatureBytes};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, Deserialize};
+
 
 /// Block header containing metadata
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -23,6 +25,7 @@ pub struct BlockHeader {
     /// Validator public key
     pub validator: PublicKeyBytes,
     /// Validator signature
+    #[serde(with = "BigArray")]
     pub signature: SignatureBytes,
 }
 

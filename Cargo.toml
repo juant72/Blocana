@@ -28,7 +28,7 @@ zeroize = "1.6.0"
 
 # Crypto
 sha2 = "0.10.6"
-ed25519-dalek = "1.0.1"
+ed25519-dalek = "2.1.1"
 
 # Networking
 libp2p = { version = "0.50.0", features = ["tokio", "tcp", "dns", "noise", "mplex", "yamux"] }
@@ -39,6 +39,8 @@ sled = "0.34.7"
 
 # WASM (optional)
 wasmer = { version = "3.1.1", optional = true }
+
+serde-big-array = "0.5.1"  # Use hyphen here
 
 [features]
 default = []

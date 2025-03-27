@@ -12,7 +12,8 @@ pub mod crypto;
 pub mod block;
 pub mod transaction;
 pub mod state;
-pub mod consensus;
+// Keep only ONE consensus module declaration - either the import or the inline definition
+// pub mod consensus; <- Comment out or remove this line since we're using an inline definition below
 pub mod network;
 pub mod storage;
 pub mod vm;
@@ -20,10 +21,13 @@ pub mod vm;
 // Re-exports of the most commonly used types
 pub use types::{Hash, PublicKeyBytes, PrivateKeyBytes, SignatureBytes};
 pub use block::{Block, BlockHeader};
-pub use consensus::{Consensus, PoETConsensus};
+pub use transaction::{Transaction, TransactionVerifier};
+// Update these re-exports to use the inline consensus module
+// pub use consensus::{Consensus, PoETConsensus};
 pub use network::{Node, NodeConfig};
 pub use storage::{BlockStore, StateStore};
-pub use transaction::{Transaction, TransactionVerifier};
+
+// ...existing code...
 
 /// Library version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -71,6 +75,36 @@ impl Blockchain {
     /// Create a new blockchain instance
     pub fn new(config: BlockchainConfig) -> Result<Self, Error> {
         Ok(Self { config })
+    }
+
+    pub fn start(&mut self) -> Result<(), Error> {
+        // Implementation goes here
+        Ok(())
+    }
+
+    /// Generate a new block
+    pub fn generate_block(&mut self) -> Result<Block, Error> {
+        // Placeholder implementation
+        Err(Error::Other("Block generation not implemented".into()))
+    }
+
+    /// Create a new transaction
+    pub fn create_transaction(&mut self, recipient: PublicKeyBytes, amount: u64) -> Result<Transaction, Error> {
+        // Placeholder implementation
+        Err(Error::Other("Transaction creation not implemented".into()))
+    }
+
+    /// Print blockchain status
+    pub fn print_status(&self) {
+        println!("Blockchain Status:");
+        println!("  Network ID: {}", self.config.network_id);
+        println!("  Block size limit: {} bytes", self.config.max_block_size);  // Add missing argument
+        println!("  Target block time: {}ms", self.config.target_block_time_ms);
+    }
+
+    /// Print connected peers
+    pub fn print_peers(&self) {
+        println!("Connected Peers: None (Not Implemented)");
     }
 }
 
@@ -179,7 +213,7 @@ pub mod consensus {
 }
 
 /// Mock VM module for compilation
-pub mod vm {
+pub mod vm_alternative {
     #[derive(Debug)]
     pub enum Error {
         InvalidBytecode(String),

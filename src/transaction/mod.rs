@@ -4,9 +4,11 @@
 
 pub mod pool;
 
+use serde_big_array::BigArray;
 pub use pool::{TransactionPool, TransactionPoolConfig};
 use crate::types::{Hash, PublicKeyBytes, SignatureBytes};
 use serde::{Serialize, Deserialize};
+
 
 /// Transaction structure
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -26,6 +28,7 @@ pub struct Transaction {
     /// Transaction data (optional)
     pub data: Vec<u8>,
     /// Transaction signature
+    #[serde(with = "BigArray")]
     pub signature: SignatureBytes,
 }
 

@@ -4,7 +4,8 @@
 
 // No necesitamos añadir #![allow(dead_code)] aquí porque lo hemos añadido a nivel de crate en lib.rs
 
-use crate::block::{Block, Hash};
+use crate::block::Block;
+use crate::types::Hash;
 
 /// Configuration for the storage layer
 #[derive(Debug, Clone)]
