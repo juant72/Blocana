@@ -53,7 +53,7 @@ Stage 1 will be implemented in 5 milestones, with each milestone building on the
 **Timeframe**: 2-3 weeks
 
 ### Tasks
-1. Set up SledDB integration
+1. Set up RocksDB integration
 2. Implement block storage and retrieval
 3. Create state storage mechanisms
 4. Implement indexing for efficient queries
@@ -120,7 +120,7 @@ Each milestone includes:
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| Performance issues with SledDB | High | Medium | Early benchmarking, alternative DB options |
+| Performance issues with RocksDB | High | Medium | Early benchmarking, alternative DB options |
 | Cryptographic vulnerabilities | Critical | Low | Extensive testing, use of established libraries |
 | Memory usage exceeds targets | High | Medium | Continuous profiling, incremental optimization |
 | Storage growth faster than expected | Medium | Medium | Implement early monitoring, prepare pruning strategy |

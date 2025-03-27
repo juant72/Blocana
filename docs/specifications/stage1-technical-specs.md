@@ -60,19 +60,23 @@ struct Transaction {
 
 ## Storage Design
 
-### SledDB Configuration
-- **Tree Names**: 
+### RocksDB Configuration
+- **Column Families**: 
   - `blocks`: Maps block hash → block data
   - `block_height`: Maps height → block hash
   - `state`: Maps address → account state
   - `transactions`: Maps transaction hash → transaction data
 - **Key Format**: Raw byte arrays
 - **Value Format**: Compressed binary serialization
+- **Performance Tuning**: 
+  - Configure bloom filters for transaction lookups
+  - Set appropriate cache sizes for blocks column family
+  - Use appropriate compression (e.g., LZ4, Zstd) based on data type
 
 ### File Structure
 - Base path: Configurable, default `"data"`
-- Database files: `data/blocks`, `data/transactions`, etc.
-- Log files: `data/logs`
+- Database files: `data/CURRENT`, `data/LOCK`, `data/LOG`, etc.
+- Column family files: `data/[cf_name]` directories
 
 ## Merkle Tree Implementation
 - **Algorithm**: Binary Merkle tree with SHA-256

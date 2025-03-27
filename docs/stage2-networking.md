@@ -1,4 +1,4 @@
-# Stage 2: Networking and Peer-to-Peer Communication in Blocana
+# eStage 2: Networking and Peer-to-Peer Communication in Blocana
 
 This document describes the peer-to-peer (P2P) networking layer that enables Blocana nodes to communicate, synchronize, and maintain consensus across the network.
 
@@ -40,6 +40,7 @@ The transport layer handles the actual sending and receiving of data between pee
 #### Authentication and Encryption
 
 All peer-to-peer communication in Blocana is encrypted using the Noise protocol, ensuring:
+
 - **Privacy**: Communications cannot be easily eavesdropped
 - **Authentication**: Nodes can verify who they are talking to
 - **Integrity**: Messages cannot be tampered with undetected
@@ -47,6 +48,7 @@ All peer-to-peer communication in Blocana is encrypted using the Noise protocol,
 #### Stream Multiplexing
 
 Multiplexing allows multiple logical communication channels to share a single network connection, similar to how multiple phone calls can share a single telephone line. Blocana uses Yamux for multiplexing, enabling:
+
 - Efficient use of network resources
 - Parallel communications without establishing multiple connections
 - Better management of different types of messages (blocks, transactions, etc.)
@@ -54,6 +56,7 @@ Multiplexing allows multiple logical communication channels to share a single ne
 ### Real-world Analogy
 
 The libp2p stack is like a postal system where:
+
 - The transport layer is the physical infrastructure (trucks, planes)
 - Authentication is like registered mail with ID verification
 - Encryption is like using sealed, tamper-evident envelopes
@@ -84,6 +87,7 @@ In addition to the DHT, nodes exchange information about other peers they know a
 ### Real-world Analogy
 
 Peer discovery is like moving to a new city:
+
 - Bootstrap nodes are like having a few friends' addresses before you move
 - The DHT is like a decentralized phone book where everyone keeps a partial list of contacts
 - Peer exchange is like meeting friends of friends at social gatherings
@@ -110,6 +114,7 @@ To minimize bandwidth usage, Blocana uses a compact binary encoding format for a
 ### Real-world Analogy
 
 Transaction and block propagation in Blocana is like an efficient rumors network:
+
 - Topics are like different categories of news (sports, politics, etc.)
 - The mesh is like having specific friends you share specific types of news with
 - The gossip factor is like occasionally sharing news with someone outside your usual circle
@@ -126,6 +131,7 @@ When a new node joins the network or a node reconnects after being offline, it n
 #### Fast Initial Sync
 
 For new nodes, Blocana implements a "fast sync" strategy:
+
 1. **Header-First Approach**: First download all block headers (which are much smaller than full blocks)
 2. **Validate Headers**: Ensure the chain of headers is valid
 3. **Request Full Blocks**: Download the full blocks in parallel from multiple peers
@@ -134,6 +140,7 @@ For new nodes, Blocana implements a "fast sync" strategy:
 #### Incremental Sync
 
 For nodes that have been offline briefly:
+
 1. **Identify Missing Blocks**: Compare the local chain with peers' chains
 2. **Request Specific Blocks**: Only download the missing blocks
 3. **Validate and Apply**: Validate the blocks and apply them to the local chain
@@ -141,6 +148,7 @@ For nodes that have been offline briefly:
 ### Bandwidth Conservation
 
 Blocana implements several techniques to minimize bandwidth during synchronization:
+
 - Request blocks from multiple peers in parallel
 - Use compact block relay format
 - Prioritize downloading from peers with low latency
@@ -149,6 +157,7 @@ Blocana implements several techniques to minimize bandwidth during synchronizati
 ### Real-world Analogy
 
 Block synchronization is like catching up on a TV series you've missed:
+
 - Fast sync is like watching a recap of previous seasons and then the latest episodes
 - Incremental sync is like only watching the episodes you missed
 - Bandwidth conservation is like downloading episodes in standard definition instead of 4K when you're in a hurry
@@ -162,6 +171,7 @@ In a distributed system, network delays and other factors can cause different no
 ### Fork Detection
 
 Blocana nodes detect forks by:
+
 1. Comparing block headers received from peers with their own chain
 2. Identifying points where chains diverge
 3. Verifying the validity of alternative chains
@@ -169,6 +179,7 @@ Blocana nodes detect forks by:
 ### Fork Choice Rule
 
 When multiple valid chains exist, Blocana applies a "fork choice rule" to determine which chain to follow:
+
 1. **Longest Chain**: Generally prefer the chain with more cumulative work (usually the longest chain in PoET)
 2. **Validation**: Ensure all blocks in the alternative chain are valid
 3. **Economic Finality**: Consider the economic weight behind each chain version
@@ -176,6 +187,7 @@ When multiple valid chains exist, Blocana applies a "fork choice rule" to determ
 ### Chain Reorganization
 
 When a node decides to switch to a different chain:
+
 1. **Find Common Ancestor**: Locate the most recent block common to both chains
 2. **Revert Blocks**: Temporarily undo blocks from the current chain back to the common ancestor
 3. **Apply New Blocks**: Apply blocks from the new chain
@@ -185,6 +197,7 @@ When a node decides to switch to a different chain:
 ### Real-world Analogy
 
 Fork resolution is like choosing between alternative versions of a collaborative document:
+
 - Fork detection is like noticing there are two different current versions
 - The fork choice rule is like deciding which version to keep based on which has more contributors
 - Chain reorganization is like merging the changes from the chosen version into your working copy
@@ -200,6 +213,7 @@ Blockchain networks operate in adversarial environments where some participants 
 #### DoS Protection
 
 Blocana implements rate limiting and resource allocation strategies to prevent denial-of-service attacks:
+
 - Per-peer message limits
 - Prioritization of peer messages based on reputation
 - Resource accounting for expensive operations
@@ -207,6 +221,7 @@ Blocana implements rate limiting and resource allocation strategies to prevent d
 #### Eclipse Attack Prevention
 
 To prevent "eclipse attacks" (where an attacker isolates a node from the honest network):
+
 - Maintain connections to a diverse set of peers
 - Regularly rotate and refresh peer connections
 - Use multiple bootstrap mechanisms
@@ -214,6 +229,7 @@ To prevent "eclipse attacks" (where an attacker isolates a node from the honest 
 #### Sybil Resistance
 
 To mitigate Sybil attacks (where an attacker creates many fake nodes):
+
 - Implement reputation systems for peers
 - Prioritize peers with longer connection history
 - Maintain a diverse set of peer connections
@@ -221,6 +237,7 @@ To mitigate Sybil attacks (where an attacker creates many fake nodes):
 ### Network Resilience
 
 Blocana is designed to maintain functionality even under challenging network conditions:
+
 - Automatic reconnection logic with exponential backoff
 - Multiple fallback mechanisms for peer discovery
 - Gradual degradation rather than complete failure when network conditions worsen
@@ -228,6 +245,7 @@ Blocana is designed to maintain functionality even under challenging network con
 ### Real-world Analogy
 
 Network security is like protecting a community from various threats:
+
 - DoS protection is like having bouncers at a venue to prevent overcrowding
 - Eclipse attack prevention is like maintaining diverse social circles so no one group can isolate you
 - Sybil resistance is like being careful about adding strangers to your trusted contacts
@@ -254,6 +272,7 @@ Network partitions (when groups of nodes become temporarily isolated from each o
 ### Cross-platform Compatibility
 
 Blocana's networking layer is designed to work across diverse environments:
+
 - **IoT Devices**: Optimized for devices with limited connectivity and power
 - **Mobile Clients**: Accommodates intermittent connectivity and NAT traversal
 - **Server Environments**: Takes advantage of higher bandwidth and stable connections
@@ -264,6 +283,7 @@ Blocana's networking layer is designed to work across diverse environments:
 The networking layer is the circulatory system of a blockchain, enabling the flow of information that keeps the entire system alive and functioning. Blocana's networking design emphasizes efficiency, resilience, and minimal resource usage, making it suitable for deployment on resource-constrained devices.
 
 Upon completion of this stage, Blocana will have a fully functional peer-to-peer network capable of:
+
 - Discovering and connecting to peers across the internet
 - Propagating transactions and blocks efficiently
 - Synchronizing the blockchain state with minimal bandwidth
@@ -275,6 +295,7 @@ With the networking foundation in place, the next stage will focus on enhancing 
 ## Further Reading
 
 For those interested in diving deeper into blockchain networking concepts:
+
 - "Kademlia: A Peer-to-peer Information System Based on the XOR Metric" by Maymounkov and Mazières
 - The libp2p documentation and specifications
 - "Eclipse Attacks on Bitcoin's Peer-to-Peer Network" by Heilman et al.

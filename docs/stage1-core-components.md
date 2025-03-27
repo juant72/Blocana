@@ -173,21 +173,22 @@ Without proper storage, a blockchain cannot maintain consensus or process transa
 - **Performance**: Must handle high transaction throughput
 - **Resource Constraints**: Especially important for Blocana's target environments
 
-### SledDB: Blocana's Storage Engine
+### RocksDB: Blocana's Storage Engine
 
 #### Overview and Benefits
 
-Blocana uses SledDB, an embedded database written in Rust, offering:
+Blocana uses RocksDB, a high-performance embedded database developed by Facebook, offering:
 
-- **Performance**: Fast read/write operations
+- **Performance**: Exceptionally fast read/write operations, especially for SSDs
 - **Durability**: ACID compliance ensures data integrity
-- **Compactness**: Efficient storage format
-- **Embedded Operation**: No separate database server needed
-- **Rust Integration**: Native compatibility with Blocana's codebase
+- **Compactness**: Efficient storage format with multiple compression options
+- **Scalability**: Proven to handle petabytes of data in production environments
+- **Column Families**: Logical separation of different data types
+- **Advanced Features**: Bloom filters, compaction strategies, and cache management
 
 #### Data Organization
 
-Blocana organizes blockchain data in SledDB using multiple "trees" (key-value collections):
+Blocana organizes blockchain data in RocksDB using multiple "column families":
 
 - **Blocks**: Stores full block data, indexed by block hash
 - **Block Heights**: Maps heights to block hashes for quick lookups
@@ -196,19 +197,20 @@ Blocana organizes blockchain data in SledDB using multiple "trees" (key-value co
 
 #### Real-world Analogy
 
-SledDB functions like a well-organized filing system where:
-- Each cabinet (tree) contains related documents
+RocksDB functions like a well-organized filing system where:
+- Each cabinet (column family) contains related documents
 - Documents are filed using specific identifiers (keys)
 - A master index helps locate any document quickly
-- The system automatically ensures no documents are lost or damaged
+- The system automatically reorganizes to maintain optimal efficiency
+- The system ensures no documents are lost or damaged even during power outages
 
 #### Performance Considerations
 
 For resource-constrained environments, Blocana implements several optimizations:
-- Caching frequently accessed data
-- Batching writes when possible
-- Pruning historical data when appropriate
-- Compression of stored data
+- Configurable block cache sizes for different usage scenarios
+- Adjustable compression settings to balance CPU vs storage
+- Custom compaction strategies optimized for blockchain access patterns
+- Column family-specific tuning options
 
 ## 5. Genesis Block and Chain Validation
 
@@ -282,7 +284,7 @@ Upon completing this stage of development, the system will have the necessary in
 For those interested in diving deeper into these concepts:
 - "Mastering Bitcoin" by Andreas M. Antonopoulos (for general blockchain concepts)
 - "Cryptography Engineering" by Ferguson, Schneier, and Kohno (for cryptographic foundations)
-- The SledDB documentation (for storage specifics)
+- The RocksDB documentation (for storage specifics)
 - Ed25519 paper by Daniel J. Bernstein et al. (for signature algorithm details)
 
 --- End of Document ---

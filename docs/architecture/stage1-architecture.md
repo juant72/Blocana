@@ -22,7 +22,7 @@ graph TD
     end
     
     subgraph Storage Layer
-        J[Block Storage] --> K[SledDB Integration]
+        J[Block Storage] --> K[RocksDB Integration]
         L[State Storage] --> K
         M[Transaction Index] --> K
     end
@@ -81,10 +81,11 @@ The storage components provide persistent blockchain state:
 - **Transaction Index**: Enables efficient transaction lookups
 
 #### Storage Design Decisions:
-- **Embedded Database**: SledDB provides a lightweight yet robust storage solution
-- **Tree Structure**: Multiple specialized trees improve query performance
-- **Batch Processing**: Critical operations use atomic batches for data integrity
+- **Embedded Database**: RocksDB provides a high-performance yet robust storage solution
+- **Column Families**: Logical separation improves query performance and allows targeted tuning
+- **Batch Processing**: Critical operations use atomic writes for data integrity
 - **Minimal Indexes**: Only essential indexes are maintained to reduce overhead
+- **Optimized Configuration**: RocksDB settings tuned specifically for blockchain workloads
 
 ### State Management
 
@@ -136,7 +137,7 @@ flowchart TD
     BlockValidator --> CryptoModule
     BlockValidator --> StateReader
     
-    Storage --> SledDB
+    Storage --> RocksDB
     Storage --> Serialization
     
     StateReader --> Storage

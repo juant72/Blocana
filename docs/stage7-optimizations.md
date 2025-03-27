@@ -236,9 +236,9 @@ Light client optimization is like creating a travel guidebook instead of moving 
 
 Blockchain nodes must store and retrieve large volumes of data with specific access patterns that differ from traditional applications. The storage engine's performance directly impacts overall system efficiency.
 
-### Optimizing SledDB for Blockchain
+### Optimizing RocksDB for Blockchain
 
-Blocana uses a customized version of SledDB with blockchain-specific optimizations:
+Blocana uses a customized version of RocksDB with blockchain-specific optimizations:
 
 #### Write Optimization
 

@@ -23,7 +23,7 @@ Total estimated development time: 9-18 months (depending on team size and scope)
 - Cryptography implementation (hashing, signatures)
 - Transaction pool management
 - Account/balance system
-- Data persistence with SledDB
+- Data persistence with RocksDB
 - Genesis block creation
 - Chain validation
 
