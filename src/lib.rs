@@ -89,7 +89,7 @@ impl Blockchain {
     }
 
     /// Create a new transaction
-    pub fn create_transaction(&mut self, recipient: PublicKeyBytes, amount: u64) -> Result<Transaction, Error> {
+    pub fn create_transaction(&mut self, _recipient: PublicKeyBytes, _amount: u64) -> Result<Transaction, Error> {
         // Placeholder implementation
         Err(Error::Other("Transaction creation not implemented".into()))
     }

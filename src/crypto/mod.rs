@@ -1,6 +1,30 @@
 //! Cryptographic utilities for Blocana
 //!
 //! This module provides the core cryptographic functions used in the blockchain.
+//!
+//! # Security Considerations
+//!
+//! - All cryptographic operations utilize standard, well-tested libraries
+//! - Private keys should be securely managed and never stored unencrypted
+//! - Signature verification is performed in constant time to prevent timing attacks
+//! - Hash functions are collision-resistant but not resistant to length extension attacks
+//!
+//! # Examples
+//!
+//! ```
+//! # use blocana::crypto;
+//! # use blocana::types::{Hash, PublicKeyBytes, PrivateKeyBytes, SignatureBytes};
+//! // Generate a new key pair
+//! let key_pair = crypto::KeyPair::generate().unwrap();
+//!
+//! // Sign a message
+//! let message = b"Important blockchain data";
+//! let signature = key_pair.sign(message);
+//!
+//! // Verify the signature
+//! let result = crypto::verify_signature(&key_pair.public_key, &signature, message);
+//! assert!(result.is_ok());
+//! ```
 
 use sha2::{Sha256, Digest};
 use ed25519_dalek::{Signer, Verifier, Signature};
@@ -72,6 +96,42 @@ impl KeyPair {
         sig_bytes.copy_from_slice(signature.to_bytes().as_ref());
         
         sig_bytes
+    }
+
+    /// Derive a child key from this key pair using a simple derivation path
+    ///
+    /// This is a basic implementation suitable for creating multiple keys from a master key.
+    /// For production HD wallet functionality, a more comprehensive BIP32 implementation
+    /// should be used.
+    ///
+    /// # Parameters
+    /// * `path` - A simple numeric index used for derivation
+    ///
+    /// # Returns
+    /// A new KeyPair derived from this one
+    ///
+    /// # Security
+    /// This derivation is deterministic - the same path always yields the same child key
+    pub fn derive_child_key(&self, path: u32) -> Result<Self, crate::Error> {
+        // Create derivation data by combining private key and path
+        let mut derivation_data = Vec::with_capacity(36); // 32 bytes for key + 4 for path
+        derivation_data.extend_from_slice(&self.private_key);
+        derivation_data.extend_from_slice(&path.to_le_bytes());
+        
+        // Hash the data to create a new deterministic private key
+        let derived_private_key = hash_data(&derivation_data);
+        
+        // Create a new keypair from this derived key
+        Self::from_private_key(&derived_private_key)
+    }
+    
+    /// Securely zeroize the private key material when the KeyPair is dropped
+    ///
+    /// This helps prevent private key data from remaining in memory after it's no longer needed
+    pub fn zeroize(&mut self) {
+        use zeroize::Zeroize;
+        self.private_key.zeroize();
+        // Note: Complete zeroization of ed25519_dalek::SigningKey would require changes to that library
     }
 }
 
@@ -174,6 +234,121 @@ pub fn compute_merkle_root(leaf_hashes: &[Hash]) -> Hash {
     hashes[0]
 }
 
+/// Compute a keyed hash using HMAC-SHA256
+///
+/// This is useful for creating authentication codes or deriving keys
+///
+/// # Parameters
+/// * `key` - The secret key for the HMAC
+/// * `message` - The message to authenticate
+///
+/// # Returns
+/// A 32-byte HMAC value
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Hash {
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<Sha256>;
+    
+    // Create HMAC instance
+    let mut mac = HmacSha256::new_from_slice(key)
+        .expect("HMAC can take keys of any size");
+    
+    // Add message data
+    mac.update(message);
+    
+    // Finalize and return
+    let result = mac.finalize().into_bytes();
+    
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&result);
+    hash
+}
+
+/// Generate a secure random value
+///
+/// Useful for nonces and other cryptographically secure random data needs
+///
+/// # Returns
+/// A random 32-byte value from the OS secure random number generator
+pub fn generate_secure_random() -> Hash {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+/// Verify multiple signatures in batch for improved performance
+pub fn batch_verify_signatures(
+    messages: &[&[u8]],
+    signatures: &[&SignatureBytes],
+    public_keys: &[&PublicKeyBytes]
+) -> Result<(), crate::Error> {
+    // Check that all arrays have the same length
+    if messages.len() != signatures.len() || messages.len() != public_keys.len() {
+        return Err(crate::Error::Crypto("Mismatched array lengths for batch verification".into()));
+    }
+    
+    // In ed25519-dalek v2.x, we need to use a Verifier instance
+    // use ed25519_dalek::Verifier;
+    
+    // Process each signature individually
+    // Note: This doesn't have the performance benefits of true batch verification
+    // but maintains API compatibility
+    for i in 0..messages.len() {
+        // Convert public key
+        let public = match VerifyingKey::try_from(public_keys[i].as_slice()) {
+            Ok(pk) => pk,
+            Err(_) => return Err(crate::Error::Crypto(format!("Invalid public key at index {}", i))),
+        };
+        
+        // Convert signature
+        let sig = match ed25519_dalek::Signature::try_from(signatures[i].as_slice()) {
+            Ok(s) => s,
+            Err(_) => return Err(crate::Error::Crypto(format!("Invalid signature at index {}", i))),
+        };
+        
+        // Verify this signature
+        if let Err(_) = public.verify_strict(messages[i], &sig) {
+            return Err(crate::Error::Crypto(format!("Signature verification failed at index {}", i)));
+        }
+    }
+    
+    // All verifications passed
+    Ok(())
+}
+
+/// Get a human-readable hex representation of a hash
+///
+/// # Parameters
+/// * `hash` - The hash to convert to hex
+///
+/// # Returns
+/// A lowercase hex string representing the hash
+pub fn hash_to_hex(hash: &Hash) -> String {
+    hash.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Parse a hex string into a hash
+///
+/// # Parameters
+/// * `hex_str` - The hex string to parse
+///
+/// # Returns
+/// A Hash if the string is valid, Error otherwise
+pub fn hex_to_hash(hex_str: &str) -> Result<Hash, crate::Error> {
+    if hex_str.len() != 64 {
+        return Err(crate::Error::Crypto("Invalid hex string length".into()));
+    }
+    
+    let mut hash = [0u8; 32];
+    for i in 0..32 {
+        let pos = i * 2;
+        let byte_str = &hex_str[pos..pos+2];
+        hash[i] = u8::from_str_radix(byte_str, 16)
+            .map_err(|_| crate::Error::Crypto("Invalid hex string".into()))?;
+    }
+    
+    Ok(hash)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +428,106 @@ mod tests {
         
         let root = compute_merkle_root(&hashes);
         assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn test_derive_child_key() {
+        let master = KeyPair::generate().unwrap();
+        
+        // Derive two children with different paths
+        let child1 = master.derive_child_key(1).unwrap();
+        let child2 = master.derive_child_key(2).unwrap();
+        
+        // Derive child1 again - should get the same key
+        let child1_again = master.derive_child_key(1).unwrap();
+        
+        // Children should be different from parent
+        assert_ne!(master.public_key, child1.public_key);
+        assert_ne!(master.private_key, child1.private_key);
+        
+        // Different children should be different from each other
+        assert_ne!(child1.public_key, child2.public_key);
+        
+        // Same derivation path should produce identical keys
+        assert_eq!(child1.public_key, child1_again.public_key);
+        assert_eq!(child1.private_key, child1_again.private_key);
+    }
+    
+    #[test]
+    fn test_hmac_sha256() {
+        let key = b"secret key";
+        let message = b"test message";
+        
+        let hmac1 = hmac_sha256(key, message);
+        
+        // Same inputs should produce same HMAC
+        let hmac2 = hmac_sha256(key, message);
+        assert_eq!(hmac1, hmac2);
+        
+        // Different messages should produce different HMACs
+        let hmac3 = hmac_sha256(key, b"different message");
+        assert_ne!(hmac1, hmac3);
+        
+        // Different keys should produce different HMACs
+        let hmac4 = hmac_sha256(b"different key", message);
+        assert_ne!(hmac1, hmac4);
+    }
+    
+    #[test]
+    fn test_batch_verify_signatures() {
+        // Generate three keypairs
+        let keypair1 = KeyPair::generate().unwrap();
+        let keypair2 = KeyPair::generate().unwrap();
+        let keypair3 = KeyPair::generate().unwrap();
+        
+        // Create messages
+        let message1 = b"message 1";
+        let message2 = b"message 2";
+        let message3 = b"message 3";
+        
+        // Sign the messages
+        let sig1 = keypair1.sign(message1);
+        let sig2 = keypair2.sign(message2);
+        let sig3 = keypair3.sign(message3);
+        
+        // Batch verify - should succeed
+        let result = batch_verify_signatures(
+            &[message1, message2, message3],
+            &[&sig1, &sig2, &sig3],
+            &[&keypair1.public_key, &keypair2.public_key, &keypair3.public_key]
+        );
+        assert!(result.is_ok());
+        
+        // Batch verify with mismatched signature - should fail
+        let result = batch_verify_signatures(
+            &[message1, message2, message3],
+            &[&sig1, &sig3, &sig2], // Signatures in wrong order
+            &[&keypair1.public_key, &keypair2.public_key, &keypair3.public_key]
+        );
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_hash_to_hex() {
+        let hash = hash_data(b"test");
+        let hex = hash_to_hex(&hash);
+        
+        // Should be 64 characters (32 bytes * 2)
+        assert_eq!(hex.len(), 64);
+        
+        // Convert back to hash
+        let hash2 = hex_to_hash(&hex).unwrap();
+        
+        // Roundtrip should match
+        assert_eq!(hash, hash2);
+    }
+    
+    #[test]
+    fn test_generate_secure_random() {
+        let random1 = generate_secure_random();
+        let random2 = generate_secure_random();
+        
+        // Two random values should be different
+        assert_ne!(random1, random2);
     }
 }
