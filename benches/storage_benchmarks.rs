@@ -11,12 +11,11 @@ extern crate test;
 use test::Bencher;
 use blocana::{
     block::Block,
-    crypto::{self, KeyPair},
     storage::{BlockchainStorage, StorageConfig},
     transaction::Transaction,
     types::{Hash, PublicKeyBytes},
 };
-use std::path::Path;
+
 use tempfile::TempDir;
 
 // Helper to create a test block
@@ -140,7 +139,7 @@ fn bench_retrieve_transaction(b: &mut Bencher) {
     let (_temp_dir, storage) = setup_benchmark_db();
     
     // Create and store a block with transactions
-    let mut block = create_test_block(1, [0u8; 32], 100);
+    let block = create_test_block(1, [0u8; 32], 100);
     
     // Get a specific transaction hash
     let tx_hash = block.transactions[50].hash();
@@ -215,16 +214,26 @@ fn bench_block_chain_iteration(b: &mut Bencher) {
 fn bench_chain_integrity_check(b: &mut Bencher) {
     let (_temp_dir, storage) = setup_benchmark_db();
     
-    // Create a chain of 50 blocks
-    let mut prev_hash = [0u8; 32];
-    for i in 1..=50 {
+    // Crear el bloque genesis con prev_hash de ceros
+    let genesis_block = create_test_block(0, [0u8; 32], 5);
+    let mut prev_hash = genesis_block.header.hash();
+    
+    // Almacenar el bloque genesis primero
+    storage.store_block(&genesis_block).unwrap();
+    
+    // Crear una cadena de 49 bloques adicionales (total 50)
+    for i in 1..50 {
         let block = create_test_block(i, prev_hash, 5);
         prev_hash = block.header.hash();
         storage.store_block(&block).unwrap();
     }
     
+    // Verificar que la integridad funciona antes de comenzar el benchmark
+    assert!(storage.verify_integrity().unwrap(), "Chain integrity check failed before benchmarking");
+    
     b.iter(|| {
-        storage.verify_integrity().unwrap();
+        let integrity_result = storage.verify_integrity().unwrap();
+        test::black_box(integrity_result);
     });
 }
 
