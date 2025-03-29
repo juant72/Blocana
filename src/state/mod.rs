@@ -8,7 +8,7 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
 /// Account state structure
-#[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(Clone, Debug, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct AccountState {
     /// Account balance
     pub balance: u64,

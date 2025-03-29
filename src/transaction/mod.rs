@@ -101,8 +101,7 @@ impl Transaction {
     
     /// Compute the hash of this transaction
     pub fn hash(&self) -> Hash {
-        // Get the bytes to hash (entire transaction)
-        let bytes = bincode::encode_to_vec(self, bincode::config::standard()).unwrap_or_default();
+        let bytes = self.serialize_for_signing();
         
         // Hash the transaction data
         crate::crypto::hash_data(&bytes)
