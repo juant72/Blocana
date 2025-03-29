@@ -261,7 +261,8 @@ fn bench_batch_account_updates(b: &mut Bencher) {
             state.nonce = i as u64;
             
             let state_bytes = bincode::encode_to_vec(&state, bincode::config::standard()).unwrap();
-            batch.put_cf(cfs.account_state, addr, state_bytes);
+            // Pass both key and value as byte slices using .as_ref()
+            batch.put_cf(cfs.account_state, addr.as_ref(), state_bytes.as_slice());
         }
         
         storage.raw_db().write(batch).unwrap();

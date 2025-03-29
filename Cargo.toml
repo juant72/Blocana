@@ -3,7 +3,9 @@ name = "blocana"
 version = "0.1.0"
 edition = "2021"
 authors = ["Encrypia Labs"]
-description = "A lightweight blockchain optimized for resource-constrained environments"
+description = "A lightweight blockchain optimized for IoT and edge computing"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
 
 # Library configuration
 [lib]
@@ -23,9 +25,10 @@ env_logger = "0.11.7"
 clap = "4.5.34"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.91"
-bincode = "2.0.1"
+bincode = { version = "2.0.1", features = ["derive"] }
 zeroize = "1.6.0"
 serde-big-array = "0.5.1"  # Use hyphen here
+thiserror = "2.0.12"
 
 # Crypto
 sha2 = "0.10.8"
@@ -75,3 +78,19 @@ panic = "abort"
 [profile.bench]
 debug = true
 incremental = true
+
+[[bench]]
+name = "crypto_benchmarks"
+harness = true
+
+[[bench]]
+name = "storage_benchmarks"
+harness = true
+
+[[example]]
+name = "blockchain_test"
+path = "examples/blockchain_test.rs"
+
+[[example]]
+name = "transaction_pool"
+path = "examples/transaction_pool.rs"

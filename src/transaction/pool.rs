@@ -13,9 +13,11 @@ use std::cmp::Ordering;
 #[derive(Debug, Clone)]
 pub struct TransactionPoolConfig {
     /// Maximum number of transactions in the pool
-    pub max_transactions: usize,
-    /// Maximum transaction lifetime in seconds
-    pub max_transaction_age_secs: u64,
+    pub max_size: usize,
+    /// Maximum transaction age before expiry (in seconds)
+    pub expiry_time: u64,
+    /// Maximum memory size of pool in bytes
+    pub max_memory: usize,
     /// Minimum fee per byte for acceptance
     pub min_fee_per_byte: u64,
 }
@@ -23,8 +25,9 @@ pub struct TransactionPoolConfig {
 impl Default for TransactionPoolConfig {
     fn default() -> Self {
         Self {
-            max_transactions: 5000,
-            max_transaction_age_secs: 3600, // 1 hour
+            max_size: 5000,
+            expiry_time: 3600, // 1 hour
+            max_memory: 32 * 1024 * 1024, // 32 MB
             min_fee_per_byte: 1,
         }
     }
@@ -94,19 +97,24 @@ pub struct TransactionPool {
 }
 
 impl TransactionPool {
-    /// Create a new transaction pool
-    pub fn new(config: TransactionPoolConfig) -> Self {
+    /// Creates a new transaction pool with default configuration
+    pub fn new() -> Self {
+        Self::with_config(TransactionPoolConfig::default())
+    }
+
+    /// Creates a transaction pool with custom configuration
+    pub fn with_config(config: TransactionPoolConfig) -> Self {
         Self {
-            config,
             txs: HashMap::new(),
             by_fee: Vec::new(),
+            config,
         }
     }
 
     /// Add a transaction to the pool
     pub fn add_transaction(&mut self, tx: Transaction, state: &mut BlockchainState) -> Result<Hash, Error> {
         // Check if pool is full
-        if self.txs.len() >= self.config.max_transactions {
+        if self.txs.len() >= self.config.max_size {
             return Err(PoolError::PoolFull.into());
         }
         
@@ -234,7 +242,7 @@ impl TransactionPool {
     
     /// Remove expired transactions
     pub fn remove_expired(&mut self) -> usize {
-        let max_age = Duration::from_secs(self.config.max_transaction_age_secs);
+        let max_age = Duration::from_secs(self.config.expiry_time);
         let now = Instant::now();
         let mut expired_hashes = Vec::new();
         
@@ -268,7 +276,7 @@ impl TransactionPool {
     }
     
     /// Remove a transaction from the pool
-    fn remove_transaction(&mut self, hash: &Hash) -> bool {
+    pub fn remove_transaction(&mut self, hash: &Hash) -> bool {
         if self.txs.remove(hash).is_some() {
             self.by_fee.retain(|tx| &tx.tx_hash != hash);
             true
