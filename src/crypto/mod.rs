@@ -43,10 +43,13 @@ pub struct KeyPair {
 impl KeyPair {
     /// Generate a new random key pair
     pub fn generate() -> Result<Self, crate::Error> {
+        use rand::TryRngCore;
         // Generate random bytes for the private key
-        let mut rng = OsRng{};
         let mut private_key_bytes = [0u8; 32];
-        rng.fill_bytes(&mut private_key_bytes);
+        
+        // Use try_fill_bytes instead of fill_bytes
+        OsRng.try_fill_bytes(&mut private_key_bytes)
+            .expect("Failed to generate random bytes");
         
         // Create signing key from random bytes
         let signing_key = SigningKey::from_bytes(&private_key_bytes);
@@ -264,14 +267,13 @@ pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Hash {
 }
 
 /// Generate a secure random value
-///
-/// Useful for nonces and other cryptographically secure random data needs
-///
-/// # Returns
-/// A random 32-byte value from the OS secure random number generator
 pub fn generate_secure_random() -> Hash {
+    use rand::rngs::OsRng;
+    use rand::TryRngCore;
+    
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    OsRng.try_fill_bytes(&mut bytes)
+        .expect("Failed to generate random bytes");
     bytes
 }
 

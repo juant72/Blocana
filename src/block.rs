@@ -10,7 +10,7 @@ use serde::{Serialize, Deserialize};
 
 
 /// Block header containing metadata
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct BlockHeader {
     /// Protocol version
     pub version: u8,
@@ -109,7 +109,7 @@ impl BlockHeader {
 }
 
 /// A full block in the Blocana blockchain
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct Block {
     /// Block header
     pub header: BlockHeader,
@@ -172,9 +172,14 @@ impl Block {
     
     /// Get the serialized size of this block in bytes
     pub fn serialized_size(&self) -> usize {
-        // Use bincode to estimate the serialized size
-        bincode::serialized_size(&self)
-            .unwrap_or(0) as usize
+        use bincode::config::standard;
+        use bincode::encode_to_vec;
+        
+        // Use bincode 2.0 API to get the serialized size
+        match encode_to_vec(self, standard()) {
+            Ok(vec) => vec.len(),
+            Err(_) => 0
+        }
     }
 }
 

@@ -11,7 +11,7 @@ use serde::{Serialize, Deserialize};
 
 
 /// Transaction structure
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct Transaction {
     /// Transaction version
     pub version: u8,
@@ -102,7 +102,7 @@ impl Transaction {
     /// Compute the hash of this transaction
     pub fn hash(&self) -> Hash {
         // Get the bytes to hash (entire transaction)
-        let bytes = bincode::serialize(self).unwrap_or_default();
+        let bytes = bincode::encode_to_vec(self, bincode::config::standard()).unwrap_or_default();
         
         // Hash the transaction data
         crate::crypto::hash_data(&bytes)
@@ -110,8 +110,11 @@ impl Transaction {
     
     /// Get the serialized size of this transaction in bytes
     pub fn serialized_size(&self) -> usize {
-        // Use bincode to calculate the exact size
-        bincode::serialized_size(self).unwrap_or(0) as usize
+    // Encode to a vector and get its length
+    match bincode::encode_to_vec(self, bincode::config::standard()) {
+        Ok(vec) => vec.len(),
+        Err(_) => 0
+    }
     }
 }
 

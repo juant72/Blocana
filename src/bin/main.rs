@@ -1,42 +1,43 @@
 use blocana::{Blockchain, BlockchainConfig, Block, Transaction, PublicKeyBytes}; // Quitamos Transaction ya que no se usa
 use std::process;
 use std::io::{self, BufRead, Write};
-use clap::{App, Arg}; // Quitamos SubCommand ya que no se usa
+use clap::{Command, Arg}; // Quitamos SubCommand ya que no se usa
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 fn main() {
     // Parse command line arguments
-    let matches = App::new("Blocana")
+    let matches = Command::new("Blocana")
         .version(blocana::VERSION)
         .author("Encrypia Labs")
         .about("A lightweight blockchain for resource-constrained environments")
-        .arg(Arg::with_name("node")
+        .arg(Arg::new("node")
             .long("node")
             .help("Run as a full node"))
-        .arg(Arg::with_name("light")
+        .arg(Arg::new("light")
             .long("light")
             .help("Run as a light client"))
-        .arg(Arg::with_name("port")
+        .arg(Arg::new("port")
             .long("port")
-            .takes_value(true)
-            .default_value("8080")
-            .help("Port to listen on"))
-        .arg(Arg::with_name("connect")
+            .value_name("PORT")
+            .help("Port to listen on")
+            .default_value("8080"))
+        .arg(Arg::new("connect")
             .long("connect")
-            .takes_value(true)
+            .value_name("ADDRESS")
             .help("Address of node to connect to"))
-        .arg(Arg::with_name("interactive")
+        .arg(Arg::new("interactive")
             .long("interactive")
             .short('i') // Cambiado de "i" a 'i' para corregir el error
-            .help("Run in interactive mode"))
+            .help("Run in interactive mode")
+            .action(clap::ArgAction::SetTrue)) // Añadir esta línea
         .get_matches();
 
     // Configure the blockchain
     let mut config = BlockchainConfig::default();
     
     // Apply command line options to config
-    if let Some(port) = matches.value_of("port") {
+    if let Some(port) = matches.get_one::<String>("port") {
         if let Ok(port_num) = port.parse::<u16>() {
             config.network_config.listen_port = port_num;
         } else {
@@ -69,7 +70,7 @@ fn main() {
             println!("Blocana node running on port {}", listen_port);
             
             // If interactive mode is enabled, start the CLI
-            if matches.is_present("interactive") {
+            if matches.get_flag("interactive") {
                 run_interactive_cli(blockchain);
             } else {
                 // Keep the main thread alive

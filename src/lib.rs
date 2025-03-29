@@ -25,7 +25,8 @@ pub use transaction::{Transaction, TransactionVerifier};
 // Update these re-exports to use the inline consensus module
 // pub use consensus::{Consensus, PoETConsensus};
 pub use network::{Node, NodeConfig};
-pub use storage::{BlockStore, StateStore};
+pub use storage::block_store::BlockStore;
+pub use storage::state_store::StateStore;
 
 // ...existing code...
 
@@ -168,6 +169,7 @@ impl From<storage::Error> for Error {
             storage::Error::Database(s) => Error::DB(s),
             storage::Error::Serialization(s) => Error::Serialization(s),
             storage::Error::Other(s) => Error::Other(s),
+            storage::Error::NotFound(_) => todo!(),
         }
     }
 }
@@ -190,9 +192,15 @@ impl From<vm::Error> for Error {
     }
 }
 
-impl From<bincode::Error> for Error {
-    fn from(err: bincode::Error) -> Self {
-        Error::Serialization(format!("{}", err))
+impl From<bincode::error::EncodeError> for Error {
+    fn from(err: bincode::error::EncodeError) -> Self {
+        Error::Serialization(format!("Encoded error: {}", err))
+    }
+}
+
+impl From<bincode::error::DecodeError> for Error {
+    fn from(err: bincode::error::DecodeError) -> Self {
+        Error::Serialization(format!("Decode error: {}", err))
     }
 }
 

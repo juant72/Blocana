@@ -17,33 +17,48 @@ path = "src/bin/main.rs"
 
 [dependencies]
 # Core dependencies
-rand = "0.8.5"
+rand = "0.9.0"
 log = "0.4.17"
-env_logger = "0.10.0"
-clap = "3.2.22"
+env_logger = "0.11.7"
+clap = "4.5.34"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.91"
-bincode = "1.3.3"
+bincode = "2.0.1"
 zeroize = "1.6.0"
 serde-big-array = "0.5.1"  # Use hyphen here
 
 # Crypto
-sha2 = "0.10.6"
+sha2 = "0.10.8"
 ed25519-dalek = "2.1.1"
 hmac = "0.12.1"           # Added for HMAC support
+hex = "0.4.3"             # Añadir para mostrar hashes en formato hexadecimal
 
 # Networking
-libp2p = { version = "0.50.0", features = ["tokio", "tcp", "dns", "noise", "mplex", "yamux"] }
+libp2p = { version = "0.55.0", features = [
+    "tokio",
+    "tcp",
+    "dns",
+    "noise",
+    "yamux",
+    "identify",    # Replacement for some functionality
+    "ping",        # Basic network health
+    "kad",         # For DHT functionality
+    "gossipsub",   # For message propagation
+    "websocket"    # Additional transport
+]}
 tokio = { version = "1.25.0", features = ["full"] }
 
 # Storage
 sled = "0.34.7"
+rocksdb = "0.23.0"
 
 # WASM (optional)
-wasmer = { version = "3.1.1", optional = true }
+wasmer = { version = "5.0.4", optional = true }
 
 [dev-dependencies]
 criterion = "0.5.1"      # Added for additional benchmarking support
+env_logger = "0.11.7"    # También se necesita en dev-dependencies
+tempfile = "3.8.0"       # Add this line for temporary directories in tests
 
 [features]
 default = []
@@ -57,3 +72,4 @@ panic = "abort"
 
 [profile.bench]
 debug = true
+incremental = true
