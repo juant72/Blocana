@@ -150,6 +150,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(storage.verify_integrity()?);
     println!("✅ Database integrity verified");
     
+    // Cierra explícitamente la conexión a la base de datos antes de eliminar
+    drop(storage);
+    println!("✅ Database connection closed properly");
+        
+    
     // Clean up resources
     std::fs::remove_dir_all(test_db_path)?;
     println!("\n✅ Integration test completed successfully! The blockchain works correctly.");
