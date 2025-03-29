@@ -9,7 +9,6 @@ pub use pool::{TransactionPool, TransactionPoolConfig};
 use crate::types::{Hash, PublicKeyBytes, SignatureBytes};
 use serde::{Serialize, Deserialize};
 
-
 /// Transaction structure
 #[derive(Clone, Debug, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct Transaction {
@@ -114,6 +113,24 @@ impl Transaction {
         Ok(vec) => vec.len(),
         Err(_) => 0
     }
+    }
+    
+    /// Estimate the size of the transaction in bytes
+    ///
+    /// # Returns
+    /// Estimated size in bytes
+    pub fn estimate_size(&self) -> usize {
+        // Basic size of the struct fields
+        let fixed_size = 1 +                 // version (u8)
+                         32 +                // sender (32 bytes)
+                         32 +                // recipient (32 bytes)
+                         8 +                 // amount (u64)
+                         8 +                 // fee (u64)
+                         8 +                 // nonce (u64)
+                         64;                 // signature (64 bytes)
+        
+        // Add the size of the data field (plus the length prefix for Vec)
+        fixed_size + 8 + self.data.len()
     }
 }
 

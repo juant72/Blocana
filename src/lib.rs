@@ -10,7 +10,7 @@ pub mod types;
 // Now declare the remaining modules
 pub mod crypto;
 pub mod block;
-pub mod transaction;
+pub mod transaction;  // This will now export the transaction pool through transaction::pool
 pub mod state;
 // Keep only ONE consensus module declaration - either the import or the inline definition
 // pub mod consensus; <- Comment out or remove this line since we're using an inline definition below
@@ -27,8 +27,6 @@ pub use transaction::{Transaction, TransactionVerifier};
 pub use network::{Node, NodeConfig};
 pub use storage::block_store::BlockStore;
 pub use storage::state_store::StateStore;
-
-// ...existing code...
 
 /// Library version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -133,6 +131,8 @@ pub enum Error {
     Serialization(String),
     /// Consensus error
     Consensus(String),
+    /// Transaction pool error
+    Pool(transaction::pool::PoolError),
     /// Other error type
     Other(String),
 }
@@ -148,6 +148,7 @@ impl std::fmt::Display for Error {
             Error::Config(s) => write!(f, "Configuration error: {}", s),
             Error::Serialization(s) => write!(f, "Serialization error: {}", s),
             Error::Consensus(s) => write!(f, "Consensus error: {}", s),
+            Error::Pool(s) => write!(f, "Transaction pool error: {}", s),
             Error::Other(s) => write!(f, "Other error: {}", s),
         }
     }
@@ -201,6 +202,12 @@ impl From<bincode::error::EncodeError> for Error {
 impl From<bincode::error::DecodeError> for Error {
     fn from(err: bincode::error::DecodeError) -> Self {
         Error::Serialization(format!("Decode error: {}", err))
+    }
+}
+
+impl From<transaction::pool::PoolError> for Error {
+    fn from(error: transaction::pool::PoolError) -> Self {
+        Error::Pool(error)
     }
 }
 
