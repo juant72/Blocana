@@ -1,4 +1,4 @@
-use blocana::{Blockchain, BlockchainConfig, Block, Transaction, PublicKeyBytes}; // Quitamos Transaction ya que no se usa
+use blocana::{Blockchain, BlockchainConfig}; // Quitamos Transaction ya que no se usa
 use std::process;
 use std::io::{self, BufRead, Write};
 use clap::{Command, Arg}; // Quitamos SubCommand ya que no se usa

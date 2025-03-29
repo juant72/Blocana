@@ -3,25 +3,6 @@
 //! This module provides a specialized interface for working with block storage,
 //! offering methods tailored to block operations while abstracting the underlying
 //! storage details.
-//!
-//! # Examples
-//!
-//! ```
-//! use blocana::storage::{BlockchainStorage, BlockStore, StorageConfig};
-//!
-//! // Open the database
-//! let config = StorageConfig::default();
-//! let storage = BlockchainStorage::open(&config).unwrap();
-//!
-//! // Create a block store
-//! let block_store = BlockStore::new(&storage);
-//!
-//! // Store a block and get its hash
-//! let block_hash = block_store.store_block(&block).unwrap();
-//!
-//! // Retrieve the latest block
-//! let latest_block = block_store.get_latest_block().unwrap();
-//! ```
 
 use super::{BlockchainStorage, Error};
 use crate::block::Block;
@@ -119,7 +100,7 @@ impl<'a> BlockStore<'a> {
     /// Returns an error if the storage operation fails
     pub fn get_latest_block(&self) -> Result<Option<Block>, Error> {
         let latest_height = self.storage.get_latest_height()?;
-        if (latest_height == 0) {
+        if latest_height == 0 {
             return Ok(None);
         }
 
@@ -196,6 +177,35 @@ impl<'a> BlockStore<'a> {
     pub fn verify_chain_integrity(&self) -> Result<bool, Error> {
         self.storage.verify_integrity()
     }
+
+    /// Get blocks in a time range if timestamp index is available
+    #[cfg(feature = "timestamp_index")]
+    pub fn get_blocks_by_time_range(
+        &self,
+        start_time: u64,
+        end_time: u64,
+        limit: usize,
+    ) -> Result<Vec<Block>, Error> {
+        self.storage
+            .get_blocks_by_time_range(start_time, end_time, limit)
+    }
+
+    /// Count blocks within a timestamp range
+    #[cfg(feature = "timestamp_index")]
+    pub fn count_blocks_by_time_range(
+        &self,
+        start_time: u64,
+        end_time: u64,
+    ) -> Result<usize, Error> {
+        self.storage
+            .count_blocks_by_time_range(start_time, end_time)
+    }
+
+    /// Find a block close to the given timestamp if timestamp index is available
+    #[cfg(feature = "timestamp_index")]
+    pub fn find_block_by_timestamp(&self, timestamp: u64) -> Result<Option<Block>, Error> {
+        self.storage.find_block_by_timestamp(timestamp)
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +279,67 @@ mod tests {
             assert_eq!(blocks.len(), 3);
             assert_eq!(blocks[0].header.height, 1);
             assert_eq!(blocks[2].header.height, 3);
+        }
+
+        // Clean up
+        temp_dir.close().unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "timestamp_index")]
+    fn test_block_store_timestamp_operations() {
+        // Create a temporary directory for the test database
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().to_str().unwrap().to_string();
+
+        // Config with test path
+        let config = StorageConfig {
+            db_path,
+            ..Default::default()
+        };
+
+        {
+            // Open the storage and create block store
+            let storage = BlockchainStorage::open(&config).unwrap();
+            let block_store = BlockStore::new(&storage);
+
+            // Create and store a chain of blocks with different timestamps
+            let genesis_hash = [0u8; 32];
+            let timestamps = [
+                1617235200000, // 2021-04-01 00:00:00
+                1617235260000, // 2021-04-01 00:01:00
+                1617235320000, // 2021-04-01 00:02:00
+            ];
+
+            let mut prev_hash = genesis_hash;
+            for (i, &timestamp) in timestamps.iter().enumerate() {
+                let height = i as u64 + 1;
+
+                // Create a block with controlled timestamp
+                let mut block = create_test_block(height, prev_hash);
+                block.header.timestamp = timestamp;
+
+                // Store block
+                prev_hash = block_store.store_block(&block).unwrap();
+            }
+
+            // Test get_blocks_by_time_range
+            let blocks = block_store
+                .get_blocks_by_time_range(
+                    1617235200000, // 00:00:00
+                    1617235260000, // 00:01:00
+                    10,
+                )
+                .unwrap();
+
+            assert_eq!(blocks.len(), 2);
+            assert_eq!(blocks[0].header.timestamp, 1617235200000);
+            assert_eq!(blocks[1].header.timestamp, 1617235260000);
+
+            // Test find_block_by_timestamp
+            let found_block = block_store.find_block_by_timestamp(1617235250000).unwrap();
+            assert!(found_block.is_some());
+            assert_eq!(found_block.unwrap().header.timestamp, 1617235200000);
         }
 
         // Clean up

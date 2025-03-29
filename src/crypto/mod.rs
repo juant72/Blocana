@@ -27,10 +27,10 @@
 //! ```
 
 use sha2::{Sha256, Digest};
-use ed25519_dalek::{Signer, Verifier, Signature};
+use ed25519_dalek::Signer;
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::VerifyingKey;
-use rand::{rngs::OsRng, RngCore};
+use rand::rngs::OsRng;
 use crate::types::{Hash, PublicKeyBytes, PrivateKeyBytes, SignatureBytes};
 
 /// Key pair structure

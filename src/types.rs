@@ -3,7 +3,7 @@
 //! This module provides type definitions used across different modules
 //! to avoid circular dependencies.
 
-use serde_big_array::BigArray;
+// use serde_big_array::BigArray;
 
 /// Hash type used throughout the blockchain (32 bytes)
 pub type Hash = [u8; 32];

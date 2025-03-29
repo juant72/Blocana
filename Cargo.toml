@@ -61,8 +61,10 @@ env_logger = "0.11.7"    # También se necesita en dev-dependencies
 tempfile = "3.8.0"       # Add this line for temporary directories in tests
 
 [features]
-default = []
-smart-contracts = ["wasmer"]
+default = ["timestamp_index"]  # Incluye timestamp_index por defecto
+timestamp_index = []           # Define la característica sin dependencias adicionales
+smart-contracts = ["dep:wasmer"]  # Usa dep:wasmer para incluir la dependencia
+wasmer = []                    # Las características existentes
 
 [profile.release]
 lto = true

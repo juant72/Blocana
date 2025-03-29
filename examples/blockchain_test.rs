@@ -14,12 +14,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 use blocana::{
-    block::{Block, BlockHeader},
+    block::Block,
     crypto::KeyPair,
     state::BlockchainState,
     storage::{BlockchainStorage, StorageConfig},
     transaction::Transaction,
-    types::{Hash, PublicKeyBytes},
 };
 
 /// Main function that runs the complete blockchain test
