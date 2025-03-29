@@ -1,7 +1,32 @@
 //! Storage layer for the Blocana blockchain
 //!
-//! This module provides persistence mechanisms for blockchain data using RocksDB.
-//! It handles storage and retrieval of blocks, transactions, and account state.
+//! This module provides persistent storage mechanisms for blockchain data using RocksDB.
+//! It handles storage and retrieval of blocks, transactions, and account states in an
+//! efficient, durable manner optimized for blockchain operations.
+//!
+//! # Design
+//!
+//! The storage layer uses RocksDB with the following column families:
+//! - `blocks`: Maps block hash → block data
+//! - `block_height`: Maps height → block hash
+//! - `transactions`: Maps transaction hash → transaction location
+//! - `account_state`: Maps account address → account state
+//!
+//! # Examples
+//!
+//! ```
+//! use blocana::storage::{BlockchainStorage, StorageConfig};
+//! 
+//! // Open the database
+//! let config = StorageConfig::default();
+//! let storage = BlockchainStorage::open(&config).unwrap();
+//! 
+//! // Store a block
+//! storage.store_block(&block).unwrap();
+//! 
+//! // Retrieve a block
+//! let retrieved_block = storage.get_block(&block_hash).unwrap();
+//! ```
 
 use crate::block::Block;
 use crate::state::AccountState;
@@ -91,31 +116,58 @@ impl Default for StorageConfig {
     }
 }
 
-/// Structure to hold column family handles
+/// A structure containing references to all column families.
+///
+/// Provides a convenient way to access all column families in the RocksDB database
+/// without having to request them individually.
 pub struct BlockchainColumnFamilies<'a> {
+    /// Column family for storing full blocks
     pub blocks: &'a ColumnFamily,
+    /// Column family for mapping block heights to block hashes
     pub block_height: &'a ColumnFamily,
+    /// Column family for transaction indexing
     pub transactions: &'a ColumnFamily,
+    /// Column family for account states
     pub account_state: &'a ColumnFamily,
 }
 
-/// Transaction location information
+/// Information about where a transaction is stored in the blockchain.
+///
+/// Used for efficient transaction lookup without scanning all blocks.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct TxLocation {
-    /// Block hash containing the transaction
+    /// Hash of the block containing the transaction
     pub block_hash: Hash,
-    /// Index of transaction within the block
+    /// Index of the transaction within the block
     pub index: u32,
 }
 
-/// Main storage interface for the blockchain
+/// Main storage interface for the blockchain.
+///
+/// Provides methods for storing and retrieving blockchain data using RocksDB.
+/// This is the primary entry point for all persistent storage operations.
 pub struct BlockchainStorage {
     /// RocksDB database instance
     db: DB,
 }
 
 impl BlockchainStorage {
-    /// Open the blockchain storage
+    /// Opens the blockchain storage with the specified configuration.
+    ///
+    /// Creates the database directory if it doesn't exist and sets up all required
+    /// column families.
+    ///
+    /// # Parameters
+    /// * `config` - Configuration for the database
+    ///
+    /// # Returns
+    /// A new `BlockchainStorage` instance or an error if the database cannot be opened
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database directory cannot be created
+    /// - The database cannot be opened
+    /// - Required column families cannot be created
     pub fn open(config: &StorageConfig) -> Result<Self, Error> {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&config.db_path)?;
@@ -139,7 +191,17 @@ impl BlockchainStorage {
         Ok(Self { db })
     }
 
-    /// Open the storage with custom column family options
+    /// Opens the storage with custom column family options.
+    ///
+    /// Provides more control over database configuration compared to `open()`.
+    ///
+    /// # Parameters
+    /// * `path` - Path to the database directory
+    /// * `options` - RocksDB options
+    /// * `cf_descriptors` - Column family descriptors with custom options
+    ///
+    /// # Returns
+    /// A new `BlockchainStorage` instance or an error
     pub fn open_with_cf_options<P: AsRef<Path>>(
         path: P,
         options: Options,
@@ -149,7 +211,13 @@ impl BlockchainStorage {
         Ok(Self { db })
     }
 
-    /// Get column family handles
+    /// Gets references to all column families.
+    ///
+    /// # Returns
+    /// A struct containing references to all column families
+    ///
+    /// # Errors
+    /// Returns an error if any required column family is missing
     pub fn get_column_families(&self) -> Result<BlockchainColumnFamilies<'_>, Error> {
         let blocks = self
             .db
@@ -178,7 +246,17 @@ impl BlockchainStorage {
         })
     }
 
-    /// Store a block in the database
+    /// Stores a block in the database.
+    ///
+    /// Stores the block and updates all associated indices in a single atomic operation.
+    ///
+    /// # Parameters
+    /// * `block` - The block to store
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database write fails
+    /// - Serialization fails
     pub fn store_block(&self, block: &Block) -> Result<(), Error> {
         let cfs = self.get_column_families()?;
 
@@ -212,7 +290,18 @@ impl BlockchainStorage {
         Ok(())
     }
 
-    /// Get a block by its hash
+    /// Retrieves a block by its hash.
+    ///
+    /// # Parameters
+    /// * `hash` - The hash of the block to retrieve
+    ///
+    /// # Returns
+    /// The block if found, None if not found
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database read fails
+    /// - Deserialization fails
     pub fn get_block(&self, hash: &Hash) -> Result<Option<Block>, Error> {
         let cfs = self.get_column_families()?;
 
@@ -226,7 +315,21 @@ impl BlockchainStorage {
         }
     }
 
-    /// Get a block by its height
+    /// Gets a block by its height.
+    ///
+    /// First retrieves the block hash for the given height, then gets the block.
+    ///
+    /// # Parameters
+    /// * `height` - The height of the block to retrieve
+    ///
+    /// # Returns
+    /// The block if found, None if not found
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database read fails
+    /// - The block hash index is corrupted
+    /// - Deserialization fails
     pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, Error> {
         let cfs = self.get_column_families()?;
 
@@ -250,7 +353,19 @@ impl BlockchainStorage {
         }
     }
 
-    /// Get the block hash at a specific height
+    /// Gets the block hash at a specific height.
+    ///
+    /// # Parameters
+    /// * `height` - The block height
+    ///
+    /// # Returns
+    /// The hash of the block at the specified height
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - No block exists at the given height
+    /// - The database read fails
+    /// - The hash data is invalid
     pub fn get_block_hash_by_height(&self, height: u64) -> Result<Hash, Error> {
         let cfs = self.get_column_families()?;
 
@@ -275,7 +390,15 @@ impl BlockchainStorage {
         }
     }
 
-    /// Get the latest block height
+    /// Gets the latest block height.
+    ///
+    /// # Returns
+    /// The height of the latest block, or 0 if no blocks exist
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database read fails
+    /// - The height data is corrupted
     pub fn get_latest_height(&self) -> Result<u64, Error> {
         let cfs = self.get_column_families()?;
 
@@ -298,7 +421,23 @@ impl BlockchainStorage {
         }
     }
 
-    /// Get a transaction by its hash
+    /// Gets a transaction by its hash.
+    ///
+    /// First looks up the transaction location, then retrieves the transaction
+    /// from the containing block.
+    ///
+    /// # Parameters
+    /// * `hash` - The transaction hash
+    ///
+    /// # Returns
+    /// The transaction if found, None if not found
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database read fails
+    /// - The transaction index is corrupted
+    /// - The referenced block doesn't exist
+    /// - The transaction index within the block is invalid
     pub fn get_transaction(&self, hash: &Hash) -> Result<Option<Transaction>, Error> {
         let cfs = self.get_column_families()?;
 
@@ -331,7 +470,16 @@ impl BlockchainStorage {
         }
     }
 
-    /// Store account state
+    /// Stores account state for an address.
+    ///
+    /// # Parameters
+    /// * `address` - The account address
+    /// * `state` - The account state to store
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database write fails
+    /// - Serialization fails
     pub fn store_account_state(
         &self,
         address: &PublicKeyBytes,
@@ -345,7 +493,18 @@ impl BlockchainStorage {
         Ok(())
     }
 
-    /// Get account state
+    /// Gets account state for an address.
+    ///
+    /// # Parameters
+    /// * `address` - The account address
+    ///
+    /// # Returns
+    /// The account state if found, None if not found
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The database read fails
+    /// - Deserialization fails
     pub fn get_account_state(
         &self,
         address: &PublicKeyBytes,
@@ -362,7 +521,13 @@ impl BlockchainStorage {
         }
     }
 
-    /// Create a database backup
+    /// Creates a database backup.
+    ///
+    /// # Parameters
+    /// * `backup_path` - Directory where the backup will be stored
+    ///
+    /// # Errors
+    /// Returns an error if the backup operation fails
     pub fn create_backup(&self, backup_path: &str) -> Result<(), Error> {
         use rocksdb::{backup::BackupEngine, backup::BackupEngineOptions, Env};
 
@@ -379,7 +544,15 @@ impl BlockchainStorage {
         Ok(())
     }
 
-    /// Restore from a backup
+    /// Restores the database from a backup.
+    ///
+    /// # Parameters
+    /// * `backup_path` - Directory containing the backup
+    /// * `db_path` - Target directory for restoration
+    /// * `restore_options` - Options for the restore operation
+    ///
+    /// # Errors
+    /// Returns an error if the restore operation fails
     pub fn restore_from_backup(
         backup_path: &str,
         db_path: &str,
@@ -403,7 +576,15 @@ impl BlockchainStorage {
         Ok(())
     }
 
-    /// Verify database integrity
+    /// Verifies the integrity of the blockchain database.
+    ///
+    /// Walks backward through the chain to ensure all blocks properly link together.
+    ///
+    /// # Returns
+    /// `true` if the database is consistent, `false` if inconsistencies are found
+    ///
+    /// # Errors
+    /// Returns an error if the verification process fails due to database errors
     pub fn verify_integrity(&self) -> Result<bool, Error> {
         let latest_height = self.get_latest_height()?;
         if latest_height == 0 {
@@ -441,13 +622,24 @@ impl BlockchainStorage {
         Ok(true)
     }
 
-    /// Get raw database handle
+    /// Gets the raw RocksDB handle.
+    ///
+    /// Provides access to the underlying database for advanced operations.
+    ///
+    /// # Returns
+    /// A reference to the RocksDB instance
     pub fn raw_db(&self) -> &DB {
         &self.db
     }
 }
 
-/// Create column family options optimized for blockchain storage
+/// Creates column family options optimized for blockchain storage.
+///
+/// Configures different options for each column family based on its
+/// expected access patterns and data characteristics.
+///
+/// # Returns
+/// A vector of column family descriptors with optimized options
 pub fn configure_column_family_options() -> Vec<ColumnFamilyDescriptor> {
     // Default options
     let mut cf_opts = Options::default();

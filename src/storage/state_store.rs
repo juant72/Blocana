@@ -1,6 +1,32 @@
-//! Account state storage implementation
+//! Account state storage implementation for the Blocana blockchain
 //!
-//! This module provides a specialized interface for working with account state.
+//! This module provides a specialized interface for working with account state storage,
+//! offering methods tailored to account state operations while abstracting the underlying
+//! storage details.
+//!
+//! # Examples
+//!
+//! ```
+//! use blocana::storage::{BlockchainStorage, StateStore, StorageConfig};
+//! use blocana::state::AccountState;
+//!
+//! // Open the database
+//! let config = StorageConfig::default();
+//! let storage = BlockchainStorage::open(&config).unwrap();
+//!
+//! // Create a state store
+//! let state_store = StateStore::new(&storage);
+//!
+//! // Get account state
+//! let address = [0u8; 32];
+//! let account = state_store.get_account_state(&address).unwrap();
+//!
+//! // Update account state
+//! state_store.update_account_state(&address, |state| {
+//!     state.balance += 100;
+//!     state.nonce += 1;
+//! }).unwrap();
+//! ```
 
 use super::{BlockchainStorage, Error};
 use crate::state::AccountState;
@@ -8,18 +34,38 @@ use crate::types::PublicKeyBytes;
 use std::collections::HashMap;
 
 /// A specialized store for account state operations
+///
+/// Provides a higher-level interface for working with account states in storage,
+/// abstracting the underlying database operations.
 pub struct StateStore<'a> {
     /// Reference to the underlying storage
     storage: &'a BlockchainStorage,
 }
 
 impl<'a> StateStore<'a> {
-    /// Create a new state store
+    /// Creates a new state store.
+    ///
+    /// # Parameters
+    /// * `storage` - Reference to the blockchain storage
+    ///
+    /// # Returns
+    /// A new `StateStore` instance
     pub fn new(storage: &'a BlockchainStorage) -> Self {
         Self { storage }
     }
 
-    /// Get account state
+    /// Gets account state for an address.
+    ///
+    /// If the account doesn't exist, returns a new default account state.
+    ///
+    /// # Parameters
+    /// * `address` - The account address
+    ///
+    /// # Returns
+    /// The account state (existing or newly created)
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn get_account_state(&self, address: &PublicKeyBytes) -> Result<AccountState, Error> {
         match self.storage.get_account_state(address)? {
             Some(state) => Ok(state),
@@ -27,7 +73,14 @@ impl<'a> StateStore<'a> {
         }
     }
 
-    /// Store account state
+    /// Stores account state for an address.
+    ///
+    /// # Parameters
+    /// * `address` - The account address
+    /// * `state` - The account state to store
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn store_account_state(
         &self,
         address: &PublicKeyBytes,
@@ -36,7 +89,17 @@ impl<'a> StateStore<'a> {
         self.storage.store_account_state(address, state)
     }
 
-    /// Update account state with a transformation function
+    /// Updates account state using a transformation function.
+    ///
+    /// Retrieves the current state, applies the transformation function,
+    /// and stores the updated state in a single operation.
+    ///
+    /// # Parameters
+    /// * `address` - The account address
+    /// * `f` - Function that transforms the account state
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn update_account_state<F>(&self, address: &PublicKeyBytes, f: F) -> Result<(), Error>
     where
         F: FnOnce(&mut AccountState),
@@ -51,7 +114,15 @@ impl<'a> StateStore<'a> {
         self.store_account_state(address, &state)
     }
 
-    /// Store multiple account states in a batch
+    /// Stores multiple account states in a batch.
+    ///
+    /// This is more efficient than storing states individually.
+    ///
+    /// # Parameters
+    /// * `states` - Map of account addresses to their states
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn store_account_states(
         &self,
         states: HashMap<PublicKeyBytes, AccountState>,
@@ -73,7 +144,16 @@ impl<'a> StateStore<'a> {
         Ok(())
     }
 
-    /// Check if an account exists in storage
+    /// Checks if an account exists in storage.
+    ///
+    /// # Parameters
+    /// * `address` - The account address
+    ///
+    /// # Returns
+    /// `true` if the account exists in storage, `false` otherwise
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn account_exists(&self, address: &PublicKeyBytes) -> Result<bool, Error> {
         let exists = self.storage.get_account_state(address)?.is_some();
         Ok(exists)

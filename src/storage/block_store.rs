@@ -1,24 +1,63 @@
-//! Block storage implementation
+//! Block storage implementation for the Blocana blockchain
 //!
-//! This module provides a specialized interface for working with block storage.
+//! This module provides a specialized interface for working with block storage,
+//! offering methods tailored to block operations while abstracting the underlying
+//! storage details.
+//!
+//! # Examples
+//!
+//! ```
+//! use blocana::storage::{BlockchainStorage, BlockStore, StorageConfig};
+//!
+//! // Open the database
+//! let config = StorageConfig::default();
+//! let storage = BlockchainStorage::open(&config).unwrap();
+//!
+//! // Create a block store
+//! let block_store = BlockStore::new(&storage);
+//!
+//! // Store a block and get its hash
+//! let block_hash = block_store.store_block(&block).unwrap();
+//!
+//! // Retrieve the latest block
+//! let latest_block = block_store.get_latest_block().unwrap();
+//! ```
 
 use super::{BlockchainStorage, Error};
 use crate::block::Block;
 use crate::types::Hash;
 
 /// A specialized store for block operations
+///
+/// Provides a higher-level interface for working with blocks in storage,
+/// abstracting the underlying database operations.
 pub struct BlockStore<'a> {
     /// Reference to the underlying storage
     storage: &'a BlockchainStorage,
 }
 
 impl<'a> BlockStore<'a> {
-    /// Create a new block store
+    /// Creates a new block store.
+    ///
+    /// # Parameters
+    /// * `storage` - Reference to the blockchain storage
+    ///
+    /// # Returns
+    /// A new `BlockStore` instance
     pub fn new(storage: &'a BlockchainStorage) -> Self {
         Self { storage }
     }
 
-    /// Store a block
+    /// Stores a block and returns its hash.
+    ///
+    /// # Parameters
+    /// * `block` - The block to store
+    ///
+    /// # Returns
+    /// The hash of the stored block
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn store_block(&self, block: &Block) -> Result<Hash, Error> {
         // Calculate block hash
         let hash = block.header.hash();
@@ -29,43 +68,103 @@ impl<'a> BlockStore<'a> {
         Ok(hash)
     }
 
-    /// Get a block by its hash
+    /// Gets a block by its hash.
+    ///
+    /// # Parameters
+    /// * `hash` - The hash of the block to retrieve
+    ///
+    /// # Returns
+    /// The block if found, None if not found
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn get_block(&self, hash: &Hash) -> Result<Option<Block>, Error> {
         self.storage.get_block(hash)
     }
 
-    /// Get a block by its height
+    /// Gets a block by its height.
+    ///
+    /// # Parameters
+    /// * `height` - The height of the block to retrieve
+    ///
+    /// # Returns
+    /// The block if found, None if not found
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, Error> {
         self.storage.get_block_by_height(height)
     }
 
-    /// Get the block hash at a specific height
+    /// Gets the block hash at a specific height.
+    ///
+    /// # Parameters
+    /// * `height` - The block height
+    ///
+    /// # Returns
+    /// The hash of the block at the specified height
+    ///
+    /// # Errors
+    /// Returns an error if no block exists at the given height or the storage operation fails
     pub fn get_block_hash_by_height(&self, height: u64) -> Result<Hash, Error> {
         self.storage.get_block_hash_by_height(height)
     }
 
-    /// Get the latest block
+    /// Gets the latest block in the blockchain.
+    ///
+    /// # Returns
+    /// The latest block if any blocks exist, None if the blockchain is empty
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn get_latest_block(&self) -> Result<Option<Block>, Error> {
         let latest_height = self.storage.get_latest_height()?;
-        if latest_height == 0 {
+        if (latest_height == 0) {
             return Ok(None);
         }
 
         self.storage.get_block_by_height(latest_height)
     }
 
-    /// Get the latest block height
+    /// Gets the height of the latest block.
+    ///
+    /// # Returns
+    /// The height of the latest block, or 0 if no blocks exist
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn get_latest_height(&self) -> Result<u64, Error> {
         self.storage.get_latest_height()
     }
 
-    /// Check if a block exists
+    /// Checks if a block with the given hash exists.
+    ///
+    /// # Parameters
+    /// * `hash` - The block hash to check
+    ///
+    /// # Returns
+    /// `true` if the block exists, `false` otherwise
+    ///
+    /// # Errors
+    /// Returns an error if the storage operation fails
     pub fn block_exists(&self, hash: &Hash) -> Result<bool, Error> {
         let exists = self.storage.get_block(hash)?.is_some();
         Ok(exists)
     }
 
-    /// Get blocks in a range of heights
+    /// Gets blocks within a range of heights.
+    ///
+    /// # Parameters
+    /// * `start_height` - The starting height (inclusive)
+    /// * `end_height` - The ending height (inclusive)
+    ///
+    /// # Returns
+    /// A vector of blocks in the specified range
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - `end_height` is less than `start_height`
+    /// - The storage operation fails
     pub fn get_blocks_in_range(
         &self,
         start_height: u64,
@@ -87,7 +186,13 @@ impl<'a> BlockStore<'a> {
         Ok(blocks)
     }
 
-    /// Verify chain integrity
+    /// Verifies the integrity of the blockchain.
+    ///
+    /// # Returns
+    /// `true` if the blockchain is internally consistent, `false` otherwise
+    ///
+    /// # Errors
+    /// Returns an error if the verification process fails due to storage errors
     pub fn verify_chain_integrity(&self) -> Result<bool, Error> {
         self.storage.verify_integrity()
     }
