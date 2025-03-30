@@ -268,7 +268,7 @@ impl TransactionPool {
                 }
                 
                 // Get the current state for this sender
-                let (current_balance, current_nonce) = match sender_states.get(&sender) {
+                let (_current_balance, current_nonce) = match sender_states.get(&sender) {
                     Some(&state_data) => state_data,
                     None => {
                         let account = state.get_account_state(&sender);
