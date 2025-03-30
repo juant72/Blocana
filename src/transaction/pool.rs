@@ -1,13 +1,12 @@
 //! Transaction pool for managing pending transactions
 
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::transaction::Transaction;
 use crate::types::Hash;
 use std::time::{Instant, Duration};
 use crate::state::BlockchainState;
 use crate::Error;
-use std::cmp::Ordering;
 
 /// Configuration for the transaction pool
 #[derive(Debug, Clone)]
@@ -81,6 +80,7 @@ struct PooledTransaction {
 }
 
 /// Fee-indexed transaction entry
+#[derive(Clone)]
 struct TransactionWithFee {
     /// Transaction hash
     tx_hash: Hash,
@@ -95,7 +95,11 @@ pub struct TransactionPool {
     /// Pending transactions with their timestamps
     txs: HashMap<Hash, PooledTransaction>,
     /// Transactions ordered by fee (for mining priority)
-    by_fee: Vec<TransactionWithFee>, 
+    by_fee: Vec<TransactionWithFee>,
+    /// Transactions indexed by sender address
+    by_address: HashMap<Hash, HashSet<Hash>>,
+    /// Current memory usage estimate
+    memory_usage: usize,
 }
 
 impl TransactionPool {
@@ -109,6 +113,8 @@ impl TransactionPool {
         Self {
             txs: HashMap::new(),
             by_fee: Vec::new(),
+            by_address: HashMap::new(),
+            memory_usage: 0,
             config,
         }
     }
@@ -153,21 +159,50 @@ impl TransactionPool {
         }
         
         // Store transaction with timestamp
-        self.txs.insert(tx_hash, PooledTransaction {
-            transaction: tx,
+        let pooled_tx = PooledTransaction {
+            transaction: tx.clone(),
             added_time: Instant::now(),
             is_valid: true,
-        });
+        };
+        
+        // Add to primary index
+        self.txs.insert(tx_hash, pooled_tx);
         
         // Add to fee-ordered list
-        self.by_fee.push(TransactionWithFee {
+        let tx_with_fee = TransactionWithFee {
             tx_hash,
             fee_per_byte,
-        });
+        };
+        self.by_fee.push(tx_with_fee);
+        
+        // Add to sender index
+        self.by_address
+            .entry(tx.sender)
+            .or_insert_with(HashSet::new)
+            .insert(tx_hash);
+        
+        // Update memory usage estimate
+        self.memory_usage += tx_size as usize + std::mem::size_of::<PooledTransaction>() + 
+                             std::mem::size_of::<TransactionWithFee>();
+        
+        // Check memory limit and optimize if needed
+        if self.memory_usage > self.config.max_memory {
+            debug!("Transaction pool memory limit reached, attempting optimization");
+            if self.optimize_memory() == 0 {
+                // If we couldn't optimize (remove any transactions), reject this one
+                return Err(Error::Validation("Cannot add transaction due to memory constraints".into()));
+            }
+            
+            // Double-check we're still within limits
+            if self.memory_usage > self.config.max_memory {
+                return Err(Error::Validation("Cannot add transaction due to memory constraints".into()));
+            }
+        }
         
         // Sort by fee (highest first)
         self.by_fee.sort_by(|a, b| b.fee_per_byte.cmp(&a.fee_per_byte));
         
+        debug!("Added transaction to pool: {}", hex::encode(&tx_hash[0..4]));
         Ok(tx_hash)
     }
     
@@ -278,49 +313,159 @@ impl TransactionPool {
         Ok(())
     }
     
-    /// Remove a transaction from the pool
-    pub fn remove_transaction(&mut self, hash: &Hash) -> bool {
-        if self.txs.remove(hash).is_some() {
-            self.by_fee.retain(|tx| &tx.tx_hash != hash);
-            true
-        } else {
-            false
-        }
+    
+    // Get memory usage
+    pub fn memory_usage(&self) -> usize {
+        self.memory_usage
     }
     
-    /// Remove lowest priority transactions when pool is full
+    /// Remove a transaction from the pool
+    pub fn remove_transaction(&mut self, hash: &Hash) -> bool {
+        // Remove from main index and get the transaction
+        let pooled_tx = match self.txs.remove(hash) {
+            Some(tx) => tx,
+            None => return false,
+        };
+        
+        let tx = &pooled_tx.transaction;
+        
+        // Update memory usage
+        let tx_size = tx.estimate_size();
+        self.memory_usage = self.memory_usage.saturating_sub(
+            tx_size + std::mem::size_of::<PooledTransaction>() + 
+            std::mem::size_of::<TransactionWithFee>()
+        );
+        
+        // Remove from sender index
+        if let Some(sender_txs) = self.by_address.get_mut(&tx.sender) {
+            sender_txs.remove(hash);
+            if sender_txs.is_empty() {
+                self.by_address.remove(&tx.sender);
+            }
+        }
+        
+        // Note: We don't immediately remove from by_fee (binary heap)
+        // Instead, we'll filter them out when selecting transactions
+        // This avoids O(n) removal cost from the heap
+        
+        true
+    }
+    
+    // Implementation moved to a single location below
+    
+    /// Optimizes memory usage if it exceeds the configured threshold
+    ///
+    /// This method is automatically called when adding transactions,
+    /// but can also be called manually if needed.
+    ///
+    /// # Returns
+    /// Number of transactions removed during optimization
+    pub fn optimize_memory(&mut self) -> usize {
+        // If we're below 90% of the memory limit, no action needed
+        if self.memory_usage <= (self.config.max_memory * 9 / 10) {
+            return 0;
+        }
+        
+        // Calculate how much memory to free
+        // Target: reduce to 80% of max memory
+        let target_memory = self.config.max_memory * 8 / 10;
+        let memory_to_free = self.memory_usage.saturating_sub(target_memory);
+        
+        // If nothing to free, return early
+        if memory_to_free == 0 {
+            return 0;
+        }
+        
+        debug!("Memory usage ({} bytes) exceeds target, optimizing pool", self.memory_usage);
+        
+        // Estimate how many transactions to remove based on average size
+        let avg_tx_size = if self.txs.is_empty() {
+            200 // Reasonable default if no transactions
+        } else {
+            self.memory_usage / self.txs.len()
+        };
+        
+        let tx_count_to_remove = (memory_to_free / avg_tx_size).max(1);
+        debug!("Removing approximately {} transactions to free memory", tx_count_to_remove);
+        
+        // Remove the lowest-priority transactions
+        self.remove_lowest_priority_transactions(tx_count_to_remove)
+    }
+    
+    /// Remove lowest priority transactions from the pool
+    ///
+    /// # Parameters
+    /// * `count` - Maximum number of transactions to remove
+    ///
+    /// # Returns
+    /// The actual number of transactions removed
     fn remove_lowest_priority_transactions(&mut self, count: usize) -> usize {
         if self.txs.is_empty() {
             return 0;
         }
         
-        // Create a sorted list by fee (lowest first)
-        let mut sorted_txs: Vec<_> = self.txs.keys().collect();
-        sorted_txs.sort_by(|a, b| {
-            // Use proper dereferencing for HashMap::get
-            if let (Some(tx_a), Some(tx_b)) = (self.txs.get(*a), self.txs.get(*b)) {
-                let size_a = tx_a.transaction.estimate_size() as u64;
-                let size_b = tx_b.transaction.estimate_size() as u64;
-                let fee_per_byte_a = if size_a > 0 { tx_a.transaction.fee / size_a } else { tx_a.transaction.fee };
-                let fee_per_byte_b = if size_b > 0 { tx_b.transaction.fee / size_b } else { tx_b.transaction.fee };
-                
-                fee_per_byte_a.cmp(&fee_per_byte_b) // Sort by fee_per_byte ascending (lowest first)
-            } else {
-                Ordering::Equal
-            }
+        // Create a copy of by_fee in vector form so we can sort
+        let mut fee_entries: Vec<TransactionWithFee> = self.by_fee.iter().cloned().collect();
+        
+        // Sort by fee per byte (ascending) so lowest fee transactions are first
+        fee_entries.sort_by(|a, b| {
+            a.fee_per_byte.cmp(&b.fee_per_byte)
+                .then_with(|| a.tx_hash.cmp(&b.tx_hash))
         });
         
         // Take the lowest fee transactions up to count
-        let to_remove: Vec<Hash> = sorted_txs.into_iter()
+        let to_remove: Vec<_> = fee_entries.into_iter()
             .take(count)
-            .cloned()
+            .map(|entry| entry.tx_hash)
             .collect();
         
-        // Remove the selected transactions
+        // Keep track of how many we actually removed
         let mut removed = 0;
+        
+        // Remove the selected transactions
         for hash in to_remove {
             if self.remove_transaction(&hash) {
                 removed += 1;
+            }
+        }
+        
+        debug!("Memory optimization removed {} transactions", removed);
+        removed
+    }
+    
+    /// Periodic maintenance for the transaction pool
+    ///
+    /// This method performs regular maintenance tasks:
+    /// - Removing expired transactions
+    /// - Optimizing memory usage
+    /// - Cleaning up internal data structures
+    ///
+    /// It's recommended to call this method periodically
+    /// (e.g., once per minute or after processing each block)
+    ///
+    /// # Returns
+    /// Number of transactions removed during maintenance
+    pub fn perform_maintenance(&mut self) -> usize {
+        let mut removed = 0;
+        
+        // Remove expired transactions
+        removed += self.remove_expired();
+        
+        // Optimize memory usage if needed
+        removed += self.optimize_memory();
+        
+        // Clean up the priority queue if needed
+        if removed > 0 && self.by_fee.len() > self.txs.len() * 2 {
+            // If we have a lot of "ghost" entries in the binary heap,
+            // rebuild it to save memory and improve performance
+            let valid_entries: Vec<_> = self.by_fee.iter()
+                .filter(|entry| self.txs.contains_key(&entry.tx_hash))
+                .cloned()
+                .collect();
+            
+            self.by_fee.clear();
+            for entry in valid_entries {
+                self.by_fee.push(entry);
             }
         }
         

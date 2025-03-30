@@ -10,7 +10,6 @@ use blocana::{
     types::Hash,
 };
 use std::collections::HashSet;
-use std::time::Duration;
 
 /// Helper to create test transactions with specific properties
 fn create_test_transaction(
