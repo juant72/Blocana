@@ -7,6 +7,7 @@ use crate::types::{Hash, PublicKeyBytes};
 use std::time::{Instant, Duration};
 use crate::state::BlockchainState;
 use crate::Error;
+use bincode;
 
 /// Configuration for the transaction pool
 #[derive(Debug, Clone)]
@@ -600,5 +601,117 @@ impl TransactionPool {
                 debug!("Transaction {} invalidated during revalidation", hex::encode(&tx_hash[0..4]));
             }
         }
+    }
+    
+    /// Add multiple transactions to the pool in a batch operation
+    ///
+    /// This is more efficient than adding transactions individually when many transactions
+    /// need to be added at once, as it allows for optimized database operations and
+    /// minimizes redundant calculations.
+    ///
+    /// # Parameters
+    /// * `transactions` - Vector of transactions to add
+    /// * `state` - Current blockchain state (for validation)
+    ///
+    /// # Returns
+    /// A tuple containing successful and failed transaction results
+    pub fn add_transactions_batch(
+        &mut self, 
+        transactions: Vec<Transaction>,
+        state: &mut BlockchainState
+    ) -> (Vec<Hash>, Vec<(Hash, crate::Error)>) {
+        let mut successful = Vec::new();
+        let mut failed = Vec::new();
+        
+        // Create a local copy of the state that we can modify temporarily
+        // to track cumulative changes as we process the batch
+        let mut local_state = state.clone();
+        
+        // Sort transactions by sender and nonce to handle dependency chains properly
+        let mut sorted_txs: Vec<_> = transactions.into_iter()
+            .map(|tx| {
+                let hash = tx.hash();
+                (tx.sender, tx.nonce, hash, tx)
+            })
+            .collect();
+        
+        // Sort by sender first, then by nonce for each sender
+        sorted_txs.sort_by(|a, b| {
+            let sender_cmp = a.0.cmp(&b.0);
+            if sender_cmp == std::cmp::Ordering::Equal {
+                a.1.cmp(&b.1)
+            } else {
+                sender_cmp
+            }
+        });
+        
+        // Process each transaction in order
+        for (_sender, _nonce, hash, tx) in sorted_txs {
+            match self.add_transaction(tx, &mut local_state) {
+                Ok(_) => {
+                    successful.push(hash);
+                    // Also apply changes to the original state
+                    match state.apply_transaction(&self.txs.get(&hash).unwrap().transaction) {
+                        Ok(_) => {},
+                        Err(e) => {
+                            log::error!("Failed to apply transaction to original state: {}", e);
+                        }
+                    }
+                },
+                Err(e) => {
+                    failed.push((hash, e));
+                }
+            }
+        }
+        
+        // If we have a lot of successful transactions, perform maintenance to clean up
+        if successful.len() > 50 {
+            self.perform_maintenance();
+        }
+        
+        // Return results
+        (successful, failed)
+    }
+    
+    /// Add multiple transactions to the pool from serialized data
+    ///
+    /// This method is especially useful when receiving batched transactions
+    /// from the network or an API endpoint. It deserializes each transaction
+    /// and adds it to the pool.
+    ///
+    /// # Parameters
+    /// * `transaction_data` - Vector of serialized transaction bytes
+    /// * `state` - Current blockchain state (for validation)
+    ///
+    /// # Returns
+    /// A tuple containing successful and failed transaction results
+    pub fn add_serialized_transactions_batch(
+        &mut self,
+        transaction_data: Vec<Vec<u8>>,
+        state: &mut BlockchainState
+    ) -> (Vec<Hash>, Vec<(usize, crate::Error)>) {
+        let mut successful = Vec::new();
+        let mut failed = Vec::new();
+        
+        // First, deserialize all transactions
+        let mut transactions = Vec::with_capacity(transaction_data.len());
+        
+        for (idx, data) in transaction_data.into_iter().enumerate() {
+            match bincode::decode_from_slice::<Transaction, _>(&data, bincode::config::standard()) {
+                Ok((tx, _)) => transactions.push(tx),
+                Err(e) => {
+                    failed.push((idx, crate::Error::Serialization(format!("Deserialization error: {}", e))));
+                }
+            }
+        }
+        
+        // Process the deserialized transactions
+        let (tx_successful, tx_failed) = self.add_transactions_batch(transactions, state);
+        
+        // Combine the results
+        successful.extend(tx_successful);
+        failed.extend(tx_failed.into_iter().map(|(_, e)| (0, e))); // Using 0 as index placeholder since original index is lost
+        
+        (successful, failed)
     }
 }

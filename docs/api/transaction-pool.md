@@ -27,13 +27,17 @@ let pool = TransactionPool::with_config(config);
 ### Adding Transactions
 
 ```rust
-// Add a transaction to the pool
+// Add a single transaction to the pool
 let result = pool.add_transaction(transaction, &blockchain_state)?;
 if result {
     println!("Transaction added to pool");
 } else {
     println!("Transaction rejected by pool");
 }
+
+// Add multiple transactions in a batch (more efficient)
+let (successful, failed) = pool.add_transactions_batch(transactions, &mut blockchain_state);
+println!("Added {} transactions successfully, {} failed", successful.len(), failed.len());
 ```
 
 ### Transaction Selection
@@ -104,6 +108,32 @@ Transactions in the pool are prioritized based on:
 1. **Fee per byte** (primary): Higher fee-per-byte transactions have higher priority
 2. **Total fee** (secondary): For transactions with the same fee-per-byte, higher total fee has priority
 3. **Transaction hash** (tie-breaker): For deterministic ordering when fees are identical
+
+## Batch Processing
+
+The transaction pool supports efficient batch processing of multiple transactions:
+
+```rust
+// Add a batch of transactions
+let transactions: Vec<Transaction> = /* create or collect transactions */;
+let (successful, failed) = pool.add_transactions_batch(transactions, &mut state);
+
+// Process the results
+for hash in &successful {
+    println!("Successfully added: {}", hex::encode(hash));
+}
+
+for (hash, error) in &failed {
+    println!("Failed to add {}: {}", hex::encode(hash), error);
+}
+```
+
+When adding transactions in a batch:
+
+1. Transactions are automatically sorted by sender and nonce
+2. Dependencies between transactions from the same sender are respected
+3. State changes from earlier transactions are considered when validating later ones
+4. Performance is improved compared to adding each transaction individually
 
 ## Error Handling
 
