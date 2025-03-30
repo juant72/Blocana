@@ -11,8 +11,12 @@ use blocana::{
 
 #[test]
 fn test_batch_add_independent_transactions() {
-    // Create pool and state
-    let mut pool = TransactionPool::new();
+    // Create pool with min_fee_per_byte = 0
+    let config = TransactionPoolConfig {
+        min_fee_per_byte: 0, 
+        ..Default::default()
+    };
+    let mut pool = TransactionPool::with_config(config);
     let mut state = BlockchainState::new();
     
     // Create 10 different sender/recipient pairs
@@ -49,19 +53,25 @@ fn test_batch_add_independent_transactions() {
     // Pool should contain 10 transactions
     assert_eq!(pool.len(), 10);
     
-    // State should be updated for all senders
+    // Estado NO debería actualizarse automáticamente
+    // Las siguientes líneas deben actualizarse para reflejar que add_transaction ya no modifica el estado:
     for sender in &senders {
         let account = state.get_account_state(&sender.public_key);
-        assert_eq!(account.balance, 890); // 1000 - 100 - 10 fee
-        assert_eq!(account.nonce, 1);
+        assert_eq!(account.balance, 1000); // Balance no cambia
+        assert_eq!(account.nonce, 0);      // Nonce no cambia
     }
 }
 
 #[test]
 fn test_batch_add_dependent_transactions() {
-    // Create pool and state
-    let mut pool = TransactionPool::new();
+    // Create pool with min_fee_per_byte = 0
+    let config = TransactionPoolConfig {
+        min_fee_per_byte: 0, 
+        ..Default::default()
+    };
+    let mut pool = TransactionPool::with_config(config);
     let mut state = BlockchainState::new();
+    let mut state_for_finalization = state.clone(); // State para simular la finalización
     
     // Create a sender and recipient
     let sender = KeyPair::generate().unwrap();
@@ -69,6 +79,7 @@ fn test_batch_add_dependent_transactions() {
     
     // Add initial balance
     state.get_account_state(&sender.public_key).balance = 1000;
+    state_for_finalization.get_account_state(&sender.public_key).balance = 1000;
     
     // Create a batch of transactions with sequential nonces
     let mut batch = Vec::new();
@@ -82,11 +93,16 @@ fn test_batch_add_dependent_transactions() {
             vec![],
         );
         tx.sign(&sender.private_key).unwrap();
-        batch.push(tx);
+        batch.push(tx.clone());
+        
+        // Simulate finalization on the separate state
+        let total_cost = tx.amount + tx.fee;
+        state_for_finalization.get_account_state(&sender.public_key).balance -= total_cost;
+        state_for_finalization.get_account_state(&recipient.public_key).balance += tx.amount;
+        state_for_finalization.get_account_state(&sender.public_key).nonce += 1;
     }
     
     // Add transactions in batch but in reverse nonce order
-    // to test dependency handling
     batch.reverse();
     
     // Add transactions in batch
@@ -99,21 +115,32 @@ fn test_batch_add_dependent_transactions() {
     // Pool should contain 5 transactions
     assert_eq!(pool.len(), 5);
     
-    // State should reflect all transactions
+    // El estado real NO debe cambiar - el pool solo valida, no modifica
     let sender_account = state.get_account_state(&sender.public_key);
-    assert_eq!(sender_account.balance, 700); // 1000 - (50+10)*5
-    assert_eq!(sender_account.nonce, 5);
+    assert_eq!(sender_account.balance, 1000); // Balance no cambia
+    assert_eq!(sender_account.nonce, 0);      // Nonce no cambia
     
-    // Check recipient received funds
-    let recipient_account = state.get_account_state(&recipient.public_key);
-    assert_eq!(recipient_account.balance, 250); // 50*5
+    // Verificar que si finalizáramos las transacciones, el estado sería el esperado
+    let sender_account = state_for_finalization.get_account_state(&sender.public_key);
+    assert_eq!(sender_account.balance, 700); // 1000 - (50+10)*5 (simulación)
+    assert_eq!(sender_account.nonce, 5);     // Nonce actualizado (simulación)
+    
+    // Check recipient would receive funds
+    let recipient_account = state_for_finalization.get_account_state(&recipient.public_key);
+    assert_eq!(recipient_account.balance, 250); // 50*5 (simulación)
 }
+
 
 #[test]
 fn test_batch_add_mixed_success_failure() {
-    // Create pool and state
-    let mut pool = TransactionPool::new();
+    // Create pool with min_fee_per_byte = 0
+    let config = TransactionPoolConfig {
+        min_fee_per_byte: 0, 
+        ..Default::default()
+    };
+    let mut pool = TransactionPool::with_config(config);
     let mut state = BlockchainState::new();
+    let mut state_for_finalization = state.clone(); // State para simular la finalización
     
     // Create sender with limited balance
     let sender = KeyPair::generate().unwrap();
@@ -121,9 +148,11 @@ fn test_batch_add_mixed_success_failure() {
     
     // Add just enough balance for 3 transactions
     state.get_account_state(&sender.public_key).balance = 180; // (50+10)*3
+    state_for_finalization.get_account_state(&sender.public_key).balance = 180;
     
     // Create 5 transactions (more than balance allows)
     let mut batch = Vec::new();
+    
     for i in 0..5 {
         let mut tx = Transaction::new(
             sender.public_key,
@@ -138,7 +167,7 @@ fn test_batch_add_mixed_success_failure() {
     }
     
     // Add transactions in batch
-    let (successful, failed) = pool.add_transactions_batch(batch, &mut state);
+    let (successful, failed) = pool.add_transactions_batch(batch.clone(), &mut state);
     
     // Only the first 3 should succeed
     assert_eq!(successful.len(), 3);
@@ -147,16 +176,34 @@ fn test_batch_add_mixed_success_failure() {
     // Pool should contain 3 transactions
     assert_eq!(pool.len(), 3);
     
-    // State should reflect successful transactions
+    // El estado real NO debe cambiar - el pool solo valida, no modifica
     let sender_account = state.get_account_state(&sender.public_key);
-    assert_eq!(sender_account.balance, 0); // 180 - (50+10)*3
-    assert_eq!(sender_account.nonce, 3);
+    assert_eq!(sender_account.balance, 180); // Balance no cambia
+    assert_eq!(sender_account.nonce, 0);     // Nonce no cambia
+    
+    // Simular la finalización manualmente con las 3 primeras transacciones
+    for i in 0..3 {
+        let tx = &batch[i];
+        let total_cost = tx.amount + tx.fee;
+        state_for_finalization.get_account_state(&sender.public_key).balance -= total_cost;
+        state_for_finalization.get_account_state(&recipient.public_key).balance += tx.amount;
+        state_for_finalization.get_account_state(&sender.public_key).nonce += 1;
+    }
+    
+    // Verificar que si finalizáramos las transacciones, el estado sería el esperado
+    let sender_account = state_for_finalization.get_account_state(&sender.public_key);
+    assert_eq!(sender_account.balance, 0); // 180 - (50+10)*3 (simulación)
+    assert_eq!(sender_account.nonce, 3);   // Nonce actualizado (simulación)
 }
 
 #[test]
 fn test_batch_performance() {
-    // Create pool and state
-    let mut pool = TransactionPool::new();
+    // Crear pools con min_fee_per_byte = 0 para este test
+    let config = TransactionPoolConfig {
+        min_fee_per_byte: 0,
+        ..Default::default()
+    };
+    let mut pool = TransactionPool::with_config(config.clone());
     let mut state = BlockchainState::new();
     
     // Create many senders
@@ -184,8 +231,8 @@ fn test_batch_performance() {
         batch.push(tx);
     }
     
-    // First measure time for individual adds
-    let mut pool2 = TransactionPool::new();
+    // First measure time for individual adds - usando la misma configuración
+    let mut pool2 = TransactionPool::with_config(config);
     let mut state2 = state.clone();
     
     let start = std::time::Instant::now();

@@ -21,7 +21,7 @@ pub mod vm;
 // Re-exports of the most commonly used types
 pub use types::{Hash, PublicKeyBytes, PrivateKeyBytes, SignatureBytes};
 pub use block::{Block, BlockHeader};
-pub use transaction::{Transaction, TransactionVerifier};
+pub use transaction::Transaction;
 // Update these re-exports to use the inline consensus module
 // pub use consensus::{Consensus, PoETConsensus};
 pub use network::{Node, NodeConfig};
