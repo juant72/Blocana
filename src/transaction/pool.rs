@@ -1,7 +1,7 @@
 //! Transaction pool for managing pending transactions
 
 use crate::state::BlockchainState;
-use crate::transaction::metrics::{FeeRange, MetricsCollector, OperationType, SizeRange};
+use crate::transaction::metrics::{ MetricsCollector, OperationType};
 use crate::transaction::Transaction;
 use crate::types::{Hash, PublicKeyBytes};
 use crate::Error;

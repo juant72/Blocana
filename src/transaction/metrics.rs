@@ -3,7 +3,6 @@
 //! This module provides detailed instrumentation and metrics collection
 //! for the transaction pool, enabling performance monitoring and optimization.
 
-use crate::types::Hash;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
