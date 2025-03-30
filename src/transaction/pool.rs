@@ -108,19 +108,19 @@ pub struct TransactionPool {
 }
 
 impl TransactionPool {
-    /// Creates a new transaction pool with default configuration
+    /// Initialize a new transaction pool with default configuration
     pub fn new() -> Self {
         Self::with_config(TransactionPoolConfig::default())
     }
-
-    /// Creates a transaction pool with custom configuration
+    
+    /// Initialize a new transaction pool with custom configuration
     pub fn with_config(config: TransactionPoolConfig) -> Self {
         Self {
             txs: HashMap::new(),
             by_fee: Vec::new(),
             by_address: HashMap::new(),
-            memory_usage: 0,
             config,
+            memory_usage: 0,
         }
     }
 
