@@ -78,6 +78,8 @@ struct PooledTransaction {
     added_time: Instant,
     /// Whether the transaction is valid
     is_valid: bool,
+    /// Estimated memory usage of the transaction including metadata
+    size: usize,
 }
 
 /// Fee-indexed transaction entry
@@ -85,8 +87,10 @@ struct PooledTransaction {
 struct TransactionWithFee {
     /// Transaction hash
     tx_hash: Hash,
+    fee: u64,
     /// Fee per byte for priority sorting
     fee_per_byte: u64,
+    timestamp: Instant,
 }
 
 /// A pool for storing pending transactions
@@ -120,60 +124,153 @@ impl TransactionPool {
         }
     }
 
+    /// Calculate accurate memory usage of a transaction including metadata
+    ///
+    /// This method provides a comprehensive memory estimation for a transaction
+    /// in the pool, accounting for transaction data and all metadata structures.
+    ///
+    /// # Parameters
+    /// * `tx` - The transaction to measure
+    ///
+    /// # Returns
+    /// Estimated memory usage in bytes
+    fn calculate_transaction_memory_usage(&self, tx: &Transaction) -> usize {
+        // Size of the transaction itself
+        let tx_size = tx.estimate_size();
+        
+        // Size of PooledTransaction struct
+        let pooled_tx_overhead = std::mem::size_of::<PooledTransaction>();
+        
+        // Size of entry in txs HashMap (key + value + HashMap overhead)
+        let hash_map_entry_size = std::mem::size_of::<Hash>() + 
+                                  std::mem::size_of::<*const PooledTransaction>() +
+                                  32; // Approximate HashMap overhead per entry
+        
+        // Size of entry in by_fee priority queue
+        let by_fee_entry_size = std::mem::size_of::<TransactionWithFee>();
+        
+        // Size of entry in by_address HashMap
+        let sender_entry_size = if self.by_address.contains_key(&tx.sender) {
+            // If sender already exists, just add hash set entry size
+            std::mem::size_of::<Hash>() + 16 // Hash + HashSet overhead
+        } else {
+            // If new sender, add full HashMap entry
+            std::mem::size_of::<PublicKeyBytes>() +
+            std::mem::size_of::<HashSet<Hash>>() +
+            std::mem::size_of::<Hash>() + 48 // Additional overhead
+        };
+        
+        // Total memory usage
+        tx_size + pooled_tx_overhead + hash_map_entry_size + by_fee_entry_size + sender_entry_size
+    }
+    
     /// Add a transaction to the pool
+    ///
+    /// # Parameters
+    /// * `tx` - The transaction to add
+    /// * `state` - Current blockchain state (for validation)
+    ///
+    /// # Returns
+    /// `Ok(hash)` if transaction was added successfully, `Err` otherwise
     pub fn add_transaction(&mut self, tx: Transaction, state: &mut BlockchainState) -> Result<Hash, Error> {
-        // Check if pool is full
-        if self.txs.len() >= self.config.max_size {
-            return Err(PoolError::PoolFull.into());
+        // Verify transaction signature
+        tx.verify()?;
+        
+        // Check for duplicate
+        let tx_hash = tx.hash();
+        if self.txs.contains_key(&tx_hash) {
+            return Err(Error::Validation("Transaction already in pool".into()));
         }
         
-        // Validate transaction
-        self.validate_transaction(&tx)?;
+        // Get current account state
+        let sender_state = state.get_account_state(&tx.sender);
         
-        // Calculate fee per byte
+        // Validate nonce
+        if tx.nonce != sender_state.nonce {
+            return Err(Error::Validation(format!(
+                "Invalid nonce: expected {}, got {}",
+                sender_state.nonce, tx.nonce
+            )));
+        }
+        
+        // Validate balance
+        let total_cost = tx.amount.saturating_add(tx.fee);
+        if sender_state.balance < total_cost {
+            return Err(Error::Validation(format!(
+                "Insufficient balance: has {}, needs {}",
+                sender_state.balance, total_cost
+            )));
+        }
+        
+        // Check if transaction meets minimum fee requirements
         let tx_size = tx.estimate_size() as u64;
         let fee_per_byte = if tx_size > 0 { tx.fee / tx_size } else { tx.fee };
         
         if fee_per_byte < self.config.min_fee_per_byte {
-            return Err(PoolError::FeeTooLow.into());
+            return Err(Error::Validation(format!(
+                "Fee too low: {} per byte, minimum is {}",
+                fee_per_byte, self.config.min_fee_per_byte
+            )));
         }
         
-        // Calculate transaction hash
-        let tx_hash = tx.hash();
+        // Calculate accurate memory usage for this transaction
+        let tx_memory_usage = self.calculate_transaction_memory_usage(&tx);
         
-        // Check for duplicate
-        if self.txs.contains_key(&tx_hash) {
-            return Err(PoolError::DuplicateTransaction.into());
+        // Check if pool is at capacity
+        if self.txs.len() >= self.config.max_size {
+            // If we're at capacity, check if this transaction has higher fee than lowest
+            if let Some(lowest_fee_tx) = self.get_lowest_fee_transaction() {
+                let lowest_tx_size = lowest_fee_tx.estimate_size() as u64;
+                let lowest_fee_per_byte = if lowest_tx_size > 0 { lowest_fee_tx.fee / lowest_tx_size } else { lowest_fee_tx.fee };
+                
+                if fee_per_byte <= lowest_fee_per_byte {
+                    // New transaction doesn't have higher fee-per-byte, reject it
+                    return Err(Error::Validation("Transaction pool full and fee too low".into()));
+                }
+                
+                // New transaction has higher fee, remove the lowest fee transaction
+                self.remove_transaction(&lowest_fee_tx.hash());
+            }
         }
         
-        // Check if sender has enough balance
-        let sender_state = state.get_account_state(&tx.sender);
-        let required = tx.amount.saturating_add(tx.fee);
-        let is_valid = sender_state.balance >= required;
-        
-        if !is_valid {
-            debug!(
-                "Insufficient balance: has {}, needs {}",
-                sender_state.balance, required
-            );
-            return Err(PoolError::InsufficientBalance.into());
-        }
-        
-        // Store transaction with timestamp
+        // Create pooled transaction
         let pooled_tx = PooledTransaction {
             transaction: tx.clone(),
-            added_time: Instant::now(),
+            added_time: self.get_current_time(),
             is_valid: true,
+            size: tx_memory_usage,
         };
+        
+        // Create fee record for priority
+        let tx_with_fee = TransactionWithFee {
+            tx_hash,
+            fee: tx.fee,
+            fee_per_byte,
+            timestamp: pooled_tx.added_time,
+        };
+        
+        // Update the accurate memory usage before adding transaction
+        self.memory_usage += tx_memory_usage;
+        
+        // Check memory limit and trigger optimization if needed
+        if self.memory_usage > self.config.max_memory {
+            if self.optimize_memory() == 0 {
+                // Couldn't free memory, reject transaction
+                self.memory_usage -= tx_memory_usage; // Revert memory accounting
+                return Err(Error::Validation("Memory limit reached".into()));
+            }
+            
+            // Re-check after optimization
+            if self.memory_usage > self.config.max_memory {
+                self.memory_usage -= tx_memory_usage; // Revert memory accounting
+                return Err(Error::Validation("Memory limit reached".into()));
+            }
+        }
         
         // Add to primary index
         self.txs.insert(tx_hash, pooled_tx);
         
-        // Add to fee-ordered list
-        let tx_with_fee = TransactionWithFee {
-            tx_hash,
-            fee_per_byte,
-        };
+        // Add to fee index
         self.by_fee.push(tx_with_fee);
         
         // Add to sender index
@@ -182,31 +279,142 @@ impl TransactionPool {
             .or_insert_with(HashSet::new)
             .insert(tx_hash);
         
-        // Update memory usage estimate
-        self.memory_usage += tx_size as usize + std::mem::size_of::<PooledTransaction>() + 
-                             std::mem::size_of::<TransactionWithFee>();
+        // Return transaction hash
+        Ok(tx_hash)
+    }
+
+    pub fn get_current_time(&self) -> Instant {
+        Instant::now()
+    }
+
+    pub fn get_lowest_fee_transaction(&self) -> Option<&Transaction> {
+        // Get the transaction with the lowest fee from the by_fee vector
+        self.by_fee.iter()
+            .min_by_key(|tx| tx.fee_per_byte)
+            .and_then(|tx_with_fee| self.txs.get(&tx_with_fee.tx_hash))
+            .map(|pooled_tx| &pooled_tx.transaction)
+    }
+
+    /// Get current memory usage of the transaction pool
+    ///
+    /// # Returns
+    /// Memory usage in bytes
+    pub fn memory_usage(&self) -> usize {
+        self.memory_usage
+    }
+
+    /// Add multiple transactions to the pool in a batch operation
+    ///
+    /// This is more efficient than adding transactions individually when many transactions
+    /// need to be added at once, as it allows for optimized database operations and
+    /// minimizes redundant calculations.
+    ///
+    /// # Parameters
+    /// * `transactions` - Vector of transactions to add
+    /// * `state` - Current blockchain state (for validation)
+    ///
+    /// # Returns
+    /// A tuple containing successful and failed transaction results
+    pub fn add_transactions_batch(
+        &mut self, 
+        transactions: Vec<Transaction>,
+        state: &mut BlockchainState
+    ) -> (Vec<Hash>, Vec<(Hash, crate::Error)>) {
+        let mut successful = Vec::new();
+        let mut failed = Vec::new();
         
-        // Check memory limit and optimize if needed
-        if self.memory_usage > self.config.max_memory {
-            debug!("Transaction pool memory limit reached, attempting optimization");
-            if self.optimize_memory() == 0 {
-                // If we couldn't optimize (remove any transactions), reject this one
-                return Err(Error::Validation("Cannot add transaction due to memory constraints".into()));
+        // Create a local copy of the state that we can modify temporarily
+        // to track cumulative changes as we process the batch
+        let mut local_state = state.clone();
+        
+        // Sort transactions by sender and nonce to handle dependency chains properly
+        let mut sorted_txs: Vec<_> = transactions.into_iter()
+            .map(|tx| {
+                let hash = tx.hash();
+                (tx.sender, tx.nonce, hash, tx)
+            })
+            .collect();
+        
+        // Sort by sender first, then by nonce for each sender
+        sorted_txs.sort_by(|a, b| {
+            let sender_cmp = a.0.cmp(&b.0);
+            if sender_cmp == std::cmp::Ordering::Equal {
+                a.1.cmp(&b.1)
+            } else {
+                sender_cmp
             }
-            
-            // Double-check we're still within limits
-            if self.memory_usage > self.config.max_memory {
-                return Err(Error::Validation("Cannot add transaction due to memory constraints".into()));
+        });
+        
+        // Process each transaction in order
+        for (_sender, _nonce, hash, tx) in sorted_txs {
+            match self.add_transaction(tx, &mut local_state) {
+                Ok(_) => {
+                    successful.push(hash);
+                    // Also apply changes to the original state
+                    match state.apply_transaction(&self.txs.get(&hash).unwrap().transaction) {
+                        Ok(_) => {},
+                        Err(e) => {
+                            log::error!("Failed to apply transaction to original state: {}", e);
+                        }
+                    }
+                },
+                Err(e) => {
+                    failed.push((hash, e));
+                }
             }
         }
         
-        // Sort by fee (highest first)
-        self.by_fee.sort_by(|a, b| b.fee_per_byte.cmp(&a.fee_per_byte));
+        // If we have a lot of successful transactions, perform maintenance to clean up
+        if successful.len() > 50 {
+            self.perform_maintenance();
+        }
         
-        debug!("Added transaction to pool: {}", hex::encode(&tx_hash[0..4]));
-        Ok(tx_hash)
+        // Return results
+        (successful, failed)
     }
     
+    /// Add multiple transactions to the pool from serialized data
+    ///
+    /// This method is especially useful when receiving batched transactions
+    /// from the network or an API endpoint. It deserializes each transaction
+    /// and adds it to the pool.
+    ///
+    /// # Parameters
+    /// * `transaction_data` - Vector of serialized transaction bytes
+    /// * `state` - Current blockchain state (for validation)
+    ///
+    /// # Returns
+    /// A tuple containing successful and failed transaction results
+    pub fn add_serialized_transactions_batch(
+        &mut self,
+        transaction_data: Vec<Vec<u8>>,
+        state: &mut BlockchainState
+    ) -> (Vec<Hash>, Vec<(usize, crate::Error)>) {
+        let mut successful = Vec::new();
+        let mut failed = Vec::new();
+        
+        // First, deserialize all transactions
+        let mut transactions = Vec::with_capacity(transaction_data.len());
+        
+        for (idx, data) in transaction_data.into_iter().enumerate() {
+            match bincode::decode_from_slice::<Transaction, _>(&data, bincode::config::standard()) {
+                Ok((tx, _)) => transactions.push(tx),
+                Err(e) => {
+                    failed.push((idx, crate::Error::Serialization(format!("Deserialization error: {}", e))));
+                }
+            }
+        }
+        
+        // Process the deserialized transactions
+        let (tx_successful, tx_failed) = self.add_transactions_batch(transactions, state);
+        
+        // Combine the results
+        successful.extend(tx_successful);
+        failed.extend(tx_failed.into_iter().map(|(_, e)| (0, e))); // Using 0 as index placeholder since original index is lost
+        
+        (successful, failed)
+    }
+
     /// Select transactions for inclusion in a block
     ///
     /// This method carefully handles transaction dependencies, ensuring transactions
@@ -391,11 +599,6 @@ impl TransactionPool {
         Ok(())
     }
     
-    
-    // Get memory usage
-    pub fn memory_usage(&self) -> usize {
-        self.memory_usage
-    }
     
     /// Remove a transaction from the pool
     pub fn remove_transaction(&mut self, hash: &Hash) -> bool {
@@ -601,117 +804,5 @@ impl TransactionPool {
                 debug!("Transaction {} invalidated during revalidation", hex::encode(&tx_hash[0..4]));
             }
         }
-    }
-    
-    /// Add multiple transactions to the pool in a batch operation
-    ///
-    /// This is more efficient than adding transactions individually when many transactions
-    /// need to be added at once, as it allows for optimized database operations and
-    /// minimizes redundant calculations.
-    ///
-    /// # Parameters
-    /// * `transactions` - Vector of transactions to add
-    /// * `state` - Current blockchain state (for validation)
-    ///
-    /// # Returns
-    /// A tuple containing successful and failed transaction results
-    pub fn add_transactions_batch(
-        &mut self, 
-        transactions: Vec<Transaction>,
-        state: &mut BlockchainState
-    ) -> (Vec<Hash>, Vec<(Hash, crate::Error)>) {
-        let mut successful = Vec::new();
-        let mut failed = Vec::new();
-        
-        // Create a local copy of the state that we can modify temporarily
-        // to track cumulative changes as we process the batch
-        let mut local_state = state.clone();
-        
-        // Sort transactions by sender and nonce to handle dependency chains properly
-        let mut sorted_txs: Vec<_> = transactions.into_iter()
-            .map(|tx| {
-                let hash = tx.hash();
-                (tx.sender, tx.nonce, hash, tx)
-            })
-            .collect();
-        
-        // Sort by sender first, then by nonce for each sender
-        sorted_txs.sort_by(|a, b| {
-            let sender_cmp = a.0.cmp(&b.0);
-            if sender_cmp == std::cmp::Ordering::Equal {
-                a.1.cmp(&b.1)
-            } else {
-                sender_cmp
-            }
-        });
-        
-        // Process each transaction in order
-        for (_sender, _nonce, hash, tx) in sorted_txs {
-            match self.add_transaction(tx, &mut local_state) {
-                Ok(_) => {
-                    successful.push(hash);
-                    // Also apply changes to the original state
-                    match state.apply_transaction(&self.txs.get(&hash).unwrap().transaction) {
-                        Ok(_) => {},
-                        Err(e) => {
-                            log::error!("Failed to apply transaction to original state: {}", e);
-                        }
-                    }
-                },
-                Err(e) => {
-                    failed.push((hash, e));
-                }
-            }
-        }
-        
-        // If we have a lot of successful transactions, perform maintenance to clean up
-        if successful.len() > 50 {
-            self.perform_maintenance();
-        }
-        
-        // Return results
-        (successful, failed)
-    }
-    
-    /// Add multiple transactions to the pool from serialized data
-    ///
-    /// This method is especially useful when receiving batched transactions
-    /// from the network or an API endpoint. It deserializes each transaction
-    /// and adds it to the pool.
-    ///
-    /// # Parameters
-    /// * `transaction_data` - Vector of serialized transaction bytes
-    /// * `state` - Current blockchain state (for validation)
-    ///
-    /// # Returns
-    /// A tuple containing successful and failed transaction results
-    pub fn add_serialized_transactions_batch(
-        &mut self,
-        transaction_data: Vec<Vec<u8>>,
-        state: &mut BlockchainState
-    ) -> (Vec<Hash>, Vec<(usize, crate::Error)>) {
-        let mut successful = Vec::new();
-        let mut failed = Vec::new();
-        
-        // First, deserialize all transactions
-        let mut transactions = Vec::with_capacity(transaction_data.len());
-        
-        for (idx, data) in transaction_data.into_iter().enumerate() {
-            match bincode::decode_from_slice::<Transaction, _>(&data, bincode::config::standard()) {
-                Ok((tx, _)) => transactions.push(tx),
-                Err(e) => {
-                    failed.push((idx, crate::Error::Serialization(format!("Deserialization error: {}", e))));
-                }
-            }
-        }
-        
-        // Process the deserialized transactions
-        let (tx_successful, tx_failed) = self.add_transactions_batch(transactions, state);
-        
-        // Combine the results
-        successful.extend(tx_successful);
-        failed.extend(tx_failed.into_iter().map(|(_, e)| (0, e))); // Using 0 as index placeholder since original index is lost
-        
-        (successful, failed)
     }
 }
