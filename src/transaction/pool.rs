@@ -1,9 +1,9 @@
 //! Transaction pool for managing pending transactions
 
 use log::debug;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeMap};
 use crate::transaction::Transaction;
-use crate::types::Hash;
+use crate::types::{Hash, PublicKeyBytes};
 use std::time::{Instant, Duration};
 use crate::state::BlockchainState;
 use crate::Error;
@@ -207,75 +207,152 @@ impl TransactionPool {
     }
     
     /// Select transactions for inclusion in a block
+    ///
+    /// This method carefully handles transaction dependencies, ensuring transactions
+    /// from the same sender are selected in the correct nonce order.
+    ///
+    /// # Parameters
+    /// * `max_count` - Maximum number of transactions to select
+    /// * `state` - Current blockchain state for validation
+    ///
+    /// # Returns
+    /// A vector of valid transactions, in order of priority
     pub fn select_transactions(
         &self, 
         max_count: usize, 
         state: &mut BlockchainState
     ) -> Vec<Transaction> {
-        // Explicit type annotation
-        let mut result: Vec<Transaction> = Vec::new();
-        let mut used_senders = HashMap::new();
+        let mut result = Vec::new();
+        let mut sender_states: HashMap<PublicKeyBytes, (u64, u64)> = HashMap::new();
         
         // Create a sorted list of transactions by fee
-        let mut sorted_txs = Vec::new();
-        for tx_with_fee in &self.by_fee {
-            if let Some(pooled_tx) = self.txs.get(&tx_with_fee.tx_hash) {
-                sorted_txs.push((tx_with_fee, pooled_tx));
-            }
-        }
+        let mut sorted_txs: Vec<&PooledTransaction> = self.txs.values()
+            .filter(|tx| tx.is_valid)
+            .collect();
         
-        // Sort by fee first, then by time
+        // Sort by fee per byte (descending), then by timestamp (ascending)
         sorted_txs.sort_by(|a, b| {
-            a.0.fee_per_byte.cmp(&b.0.fee_per_byte).reverse()
-                .then(a.1.added_time.cmp(&b.1.added_time))
+            let a_fee_per_byte = self.calculate_fee_per_byte(&a.transaction);
+            let b_fee_per_byte = self.calculate_fee_per_byte(&b.transaction);
+            
+            b_fee_per_byte.cmp(&a_fee_per_byte)
+                .then_with(|| a.added_time.cmp(&b.added_time))
         });
         
-        // Iterate in order of priority
-        for (_, pooled_tx) in sorted_txs {
-            if result.len() >= max_count {
+        // First pass - organize by sender and nonce into potential inclusion sets
+        let mut sender_queues: HashMap<PublicKeyBytes, BTreeMap<u64, &PooledTransaction>> = HashMap::new();
+        
+        for pooled_tx in &sorted_txs {
+            let sender = pooled_tx.transaction.sender;
+            let nonce = pooled_tx.transaction.nonce;
+            
+            sender_queues
+                .entry(sender)
+                .or_insert_with(BTreeMap::new)
+                .insert(nonce, pooled_tx);
+        }
+        
+        // Second pass - select transactions respecting dependencies
+        let mut selected_count = 0;
+        let mut remaining_txs = true;
+        
+        while remaining_txs && selected_count < max_count {
+            remaining_txs = false;
+            
+            // Calculate fee-based priority for the next transaction from each sender
+            let mut sender_priorities: Vec<(PublicKeyBytes, u64, &PooledTransaction)> = Vec::new();
+            
+            for (&sender, queue) in &sender_queues {
+                if queue.is_empty() {
+                    continue;
+                }
+                
+                // Get the current state for this sender
+                let (current_balance, current_nonce) = match sender_states.get(&sender) {
+                    Some(&state_data) => state_data,
+                    None => {
+                        let account = state.get_account_state(&sender);
+                        (account.balance, account.nonce)
+                    }
+                };
+                
+                // Look for the next sequential transaction
+                if let Some((&tx_nonce, tx)) = queue.iter().next() {
+                    if tx_nonce == current_nonce {
+                        // This transaction is next in sequence
+                        let fee_per_byte = self.calculate_fee_per_byte(&tx.transaction);
+                        sender_priorities.push((sender, fee_per_byte, tx));
+                        remaining_txs = true;
+                    }
+                }
+            }
+            
+            // If no valid transactions found, break
+            if !remaining_txs {
                 break;
             }
             
-            let tx = &pooled_tx.transaction;
-            let sender = &tx.sender;
+            // Sort by fee priority (descending)
+            sender_priorities.sort_by(|a, b| b.1.cmp(&a.1));
             
-            // Check if we already included a transaction from this sender
-            let expected_nonce = match used_senders.get(sender) {
-                Some(&nonce) => nonce,
-                None => {
-                    // Get current nonce from state
-                    state.get_account_state(sender).nonce
+            // Try to select the highest priority transaction
+            if let Some((sender, _, pooled_tx)) = sender_priorities.first() {
+                let tx = &pooled_tx.transaction;
+                let tx_nonce = tx.nonce;
+                
+                // Get current account state
+                let (mut current_balance, current_nonce) = sender_states
+                    .get(sender)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        let account = state.get_account_state(sender);
+                        (account.balance, account.nonce)
+                    });
+                
+                // Verify nonce is correct
+                if tx_nonce != current_nonce {
+                    // Remove this transaction from consideration
+                    if let Some(queue) = sender_queues.get_mut(sender) {
+                        queue.remove(&tx_nonce);
+                    }
+                    continue;
                 }
-            };
-            
-            // Check nonce is sequential
-            if tx.nonce != expected_nonce {
-                continue; // Skip this transaction
-            }
-            
-            // Get sender's current balance
-            let mut balance = state.get_account_state(sender).balance;
-            
-            // Deduct amounts from transactions we've already selected
-            for prev_tx in &result {
-                if &prev_tx.sender == sender {
-                    balance = balance.saturating_sub(prev_tx.amount + prev_tx.fee);
+                
+                // Verify balance is sufficient
+                let total_cost = tx.amount.saturating_add(tx.fee);
+                if current_balance < total_cost {
+                    // Remove this transaction from consideration
+                    if let Some(queue) = sender_queues.get_mut(sender) {
+                        queue.remove(&tx_nonce);
+                    }
+                    continue;
+                }
+                
+                // Transaction is valid - add it to results
+                result.push(tx.clone());
+                selected_count += 1;
+                
+                // Update sender state in our tracking map
+                current_balance = current_balance.saturating_sub(total_cost);
+                sender_states.insert(*sender, (current_balance, current_nonce + 1));
+                
+                // Remove this transaction from consideration
+                if let Some(queue) = sender_queues.get_mut(sender) {
+                    queue.remove(&tx_nonce);
                 }
             }
-            
-            // Check if sender has enough balance
-            if balance < tx.amount + tx.fee {
-                continue; // Skip this transaction
-            }
-            
-            // Add transaction to result
-            result.push(tx.clone());
-            
-            // Track the next expected nonce for this sender
-            used_senders.insert(*sender, tx.nonce + 1);
         }
         
         result
+    }
+    
+    /// Calculate fee per byte for a transaction
+    fn calculate_fee_per_byte(&self, tx: &Transaction) -> u64 {
+        let size = tx.estimate_size() as u64;
+        if size == 0 {
+            return tx.fee; // Avoid division by zero
+        }
+        tx.fee / size
     }
     
     /// Remove expired transactions
