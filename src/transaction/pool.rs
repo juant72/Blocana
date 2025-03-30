@@ -76,6 +76,8 @@ struct PooledTransaction {
     transaction: Transaction,
     /// When the transaction was added
     added_time: Instant,
+    /// Whether the transaction is valid
+    is_valid: bool,
 }
 
 /// Fee-indexed transaction entry
@@ -154,6 +156,7 @@ impl TransactionPool {
         self.txs.insert(tx_hash, PooledTransaction {
             transaction: tx,
             added_time: Instant::now(),
+            is_valid: true,
         });
         
         // Add to fee-ordered list
@@ -337,5 +340,43 @@ impl TransactionPool {
     /// Get a transaction from the pool
     pub fn get_transaction(&self, hash: &Hash) -> Option<&Transaction> {
         self.txs.get(hash).map(|pooled_tx| &pooled_tx.transaction)
+    }
+    
+    /// Get all transactions currently in the pool
+    ///
+    /// # Returns
+    /// An iterator over all transactions
+    pub fn get_all_transactions(&self) -> impl Iterator<Item = &Transaction> {
+        self.txs.values().map(|pooled_tx| &pooled_tx.transaction)
+    }
+    
+    /// Revalidate transactions against the current state
+    ///
+    /// This is typically called after a block is processed to update
+    /// the validity status of pending transactions.
+    ///
+    /// # Parameters
+    /// * `state` - Current blockchain state
+    pub fn revalidate_transactions(&mut self, state: &mut BlockchainState) {
+        for (tx_hash, pooled_tx) in self.txs.iter_mut() {
+            let tx = &pooled_tx.transaction;
+            
+            // Get sender's current balance and nonce
+            let sender_state = state.get_account_state(&tx.sender);
+            
+            // Check if sender has enough balance
+            let required = tx.amount.saturating_add(tx.fee);
+            let has_sufficient_balance = sender_state.balance >= required;
+            
+            // Check if nonce is still valid (should be current nonce)
+            let has_valid_nonce = tx.nonce == sender_state.nonce;
+            
+            // Update transaction validity
+            pooled_tx.is_valid = has_sufficient_balance && has_valid_nonce;
+            
+            if !pooled_tx.is_valid {
+                debug!("Transaction {} invalidated during revalidation", hex::encode(&tx_hash[0..4]));
+            }
+        }
     }
 }
