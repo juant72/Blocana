@@ -1,6 +1,7 @@
 //! Transaction pool for managing pending transactions
 
 use crate::state::BlockchainState;
+use crate::transaction::metrics::{FeeRange, MetricsCollector, OperationType, SizeRange};
 use crate::transaction::Transaction;
 use crate::types::{Hash, PublicKeyBytes};
 use crate::Error;
@@ -105,6 +106,8 @@ pub struct TransactionPool {
     by_address: HashMap<Hash, HashSet<Hash>>,
     /// Current memory usage estimate
     memory_usage: usize,
+    /// Metrics collector for performance monitoring
+    metrics: MetricsCollector,
 }
 
 impl TransactionPool {
@@ -112,7 +115,7 @@ impl TransactionPool {
     pub fn new() -> Self {
         Self::with_config(TransactionPoolConfig::default())
     }
-    
+
     /// Initialize a new transaction pool with custom configuration
     pub fn with_config(config: TransactionPoolConfig) -> Self {
         Self {
@@ -121,6 +124,7 @@ impl TransactionPool {
             by_address: HashMap::new(),
             config,
             memory_usage: 0,
+            metrics: MetricsCollector::new(100), // Track the last 100 data points
         }
     }
 
@@ -177,12 +181,22 @@ impl TransactionPool {
         tx: Transaction,
         state: &mut BlockchainState,
     ) -> Result<Hash, Error> {
+        // Start metrics for this operation
+        self.metrics.start_operation(OperationType::Add);
+        let process_start = Instant::now();
+
+        // Start validation timing
+        self.metrics.start_operation(OperationType::Validate);
+
         // Verify transaction signature
         tx.verify()?;
 
         // Check for duplicate
         let tx_hash = tx.hash();
         if self.txs.contains_key(&tx_hash) {
+            self.metrics.record_transaction_rejected();
+            self.metrics.stop_operation(OperationType::Validate);
+            self.metrics.stop_operation(OperationType::Add);
             return Err(Error::Validation("Transaction already in pool".into()));
         }
 
@@ -191,6 +205,9 @@ impl TransactionPool {
 
         // Validate nonce
         if tx.nonce != sender_state.nonce {
+            self.metrics.record_transaction_rejected();
+            self.metrics.stop_operation(OperationType::Validate);
+            self.metrics.stop_operation(OperationType::Add);
             return Err(Error::Validation(format!(
                 "Invalid nonce: expected {}, got {}",
                 sender_state.nonce, tx.nonce
@@ -199,36 +216,43 @@ impl TransactionPool {
 
         // Validate balance
         let total_cost = tx.amount.saturating_add(tx.fee);
-
         if sender_state.balance < total_cost {
+            self.metrics.record_transaction_rejected();
+            self.metrics.stop_operation(OperationType::Validate);
+            self.metrics.stop_operation(OperationType::Add);
             return Err(Error::Validation(format!(
                 "Insufficient balance: has {}, needs {}",
                 sender_state.balance, total_cost
             )));
         }
 
-        // Update state if transaction is valid
-        // state.get_account_state(&tx.sender).balance -= total_cost;
-        // state.get_account_state(&tx.recipient).balance += tx.amount;
-        // state.get_account_state(&tx.sender).nonce += 1;
-
-        // Check if transaction meets minimum fee requirements
-        let tx_size = tx.estimate_size() as u64;
-        let fee_per_byte = if tx_size > 0 {
-            tx.fee / tx_size
+        // Calculate fee per byte
+        let tx_size = tx.estimate_size();
+        let tx_size_u64 = tx_size as u64;
+        let fee_per_byte = if tx_size_u64 > 0 {
+            tx.fee / tx_size_u64
         } else {
             tx.fee
         };
 
+        // Record fee metrics
+        self.metrics
+            .record_transaction_fee(fee_per_byte as f64, tx_size);
+
+        // Check minimum fee requirement
         if fee_per_byte < self.config.min_fee_per_byte {
+            self.metrics.record_transaction_rejected();
+            self.metrics.stop_operation(OperationType::Validate);
+            self.metrics.stop_operation(OperationType::Add);
             return Err(Error::Validation(format!(
                 "Fee too low: {} per byte, minimum is {}",
                 fee_per_byte, self.config.min_fee_per_byte
             )));
         }
 
-        // Calculate accurate memory usage for this transaction
-        let tx_memory_usage = self.calculate_transaction_memory_usage(&tx);
+        // End validation timing
+        self.metrics.stop_operation(OperationType::Validate);
+        let validation_time = process_start.elapsed().as_micros() as u64;
 
         // Check if pool is at capacity
         if self.txs.len() >= self.config.max_size {
@@ -243,6 +267,8 @@ impl TransactionPool {
 
                 if fee_per_byte <= lowest_fee_per_byte {
                     // New transaction doesn't have higher fee-per-byte, reject it
+                    self.metrics.record_transaction_rejected();
+                    self.metrics.stop_operation(OperationType::Add);
                     return Err(Error::Validation(
                         "Transaction pool full and fee too low".into(),
                     ));
@@ -258,7 +284,7 @@ impl TransactionPool {
             transaction: tx.clone(),
             added_time: self.get_current_time(),
             is_valid: true,
-            size: tx_memory_usage,
+            size: tx_size,
         };
 
         // Create fee record for priority
@@ -269,21 +295,53 @@ impl TransactionPool {
             timestamp: pooled_tx.added_time,
         };
 
-        // Update the accurate memory usage before adding transaction
-        self.memory_usage += tx_memory_usage;
+        // Update memory usage estimate
+        self.memory_usage += tx_size
+            + std::mem::size_of::<PooledTransaction>()
+            + std::mem::size_of::<TransactionWithFee>();
 
-        // Check memory limit and trigger optimization if needed
-        if self.memory_usage > self.config.max_memory {
-            if self.optimize_memory() == 0 {
-                // Couldn't free memory, reject transaction
-                self.memory_usage -= tx_memory_usage; // Revert memory accounting
-                return Err(Error::Validation("Memory limit reached".into()));
+        // Update memory usage metrics
+        self.metrics.update_memory_usage(self.memory_usage);
+
+        // Calcular el uso de memoria proyectado después de añadir la transacción
+        let projected_memory = self.memory_usage
+            + tx_size
+            + std::mem::size_of::<PooledTransaction>()
+            + std::mem::size_of::<TransactionWithFee>();
+
+        // Activar optimización si estamos por encima del 75% o si la adición nos pondría por encima del límite
+        if self.memory_usage > (self.config.max_memory * 3 / 4)
+            || projected_memory > self.config.max_memory
+        {
+            self.metrics.start_operation(OperationType::Optimize);
+            let removed = self.optimize_memory();
+            self.metrics.stop_operation(OperationType::Optimize);
+
+            if removed == 0 && projected_memory > self.config.max_memory {
+                // If we couldn't optimize, reject this transaction
+                self.memory_usage -= tx_size
+                    + std::mem::size_of::<PooledTransaction>()
+                    + std::mem::size_of::<TransactionWithFee>();
+                self.metrics.update_memory_usage(self.memory_usage);
+                self.metrics.record_transaction_rejected();
+                self.metrics.stop_operation(OperationType::Add);
+                return Err(Error::Validation(
+                    "Cannot add transaction due to memory constraints".into(),
+                ));
             }
 
-            // Re-check after optimization
+            // Double-check we're still within limits
             if self.memory_usage > self.config.max_memory {
-                self.memory_usage -= tx_memory_usage; // Revert memory accounting
-                return Err(Error::Validation("Memory limit reached".into()));
+                // Still over limit, reject
+                self.memory_usage -= tx_size
+                    + std::mem::size_of::<PooledTransaction>()
+                    + std::mem::size_of::<TransactionWithFee>();
+                self.metrics.update_memory_usage(self.memory_usage);
+                self.metrics.record_transaction_rejected();
+                self.metrics.stop_operation(OperationType::Add);
+                return Err(Error::Validation(
+                    "Cannot add transaction due to memory constraints".into(),
+                ));
             }
         }
 
@@ -299,7 +357,18 @@ impl TransactionPool {
             .or_insert_with(HashSet::new)
             .insert(tx_hash);
 
-        // Return transaction hash
+        // Update transaction count metrics
+        self.metrics.update_transaction_count(self.txs.len());
+
+        // Record successful addition
+        let processing_time = process_start.elapsed().as_micros() as u64;
+        self.metrics
+            .record_transaction_added(processing_time, validation_time);
+
+        // End total operation timing
+        self.metrics.stop_operation(OperationType::Add);
+
+        debug!("Added transaction to pool: {}", hex::encode(&tx_hash[0..4]));
         Ok(tx_hash)
     }
 
@@ -316,7 +385,6 @@ impl TransactionPool {
             .map(|pooled_tx| &pooled_tx.transaction)
     }
 
-    
     /// Get current memory usage of the transaction pool
     ///
     /// # Returns
@@ -324,7 +392,6 @@ impl TransactionPool {
     pub fn memory_usage(&self) -> usize {
         self.memory_usage
     }
-
 
     /// Add multiple transactions to the pool in a batch operation
     ///
@@ -513,10 +580,12 @@ impl TransactionPool {
     }
 
     pub fn select_transactions(
-        &self,
+        &mut self,
         max_count: usize,
         state: &mut BlockchainState,
     ) -> Vec<Transaction> {
+        self.metrics.start_operation(OperationType::Select);
+
         let mut result = Vec::new();
 
         // En vez de usar estados mantenidos internamente, usar directamente los valores del state pasado como parámetro
@@ -603,6 +672,7 @@ impl TransactionPool {
             result.push(tx.clone());
         }
 
+        self.metrics_mut().stop_operation(OperationType::Select);
         result
     }
 
@@ -663,6 +733,11 @@ impl TransactionPool {
             self.remove_transaction(&hash);
         }
 
+        // Record expired transactions in metrics
+        if count > 0 {
+            self.metrics.record_transactions_expired(count as u64);
+        }
+
         count
     }
 
@@ -683,10 +758,15 @@ impl TransactionPool {
 
     /// Remove a transaction from the pool
     pub fn remove_transaction(&mut self, hash: &Hash) -> bool {
+        self.metrics.start_operation(OperationType::Remove);
+
         // Remove from main index and get the transaction
         let pooled_tx = match self.txs.remove(hash) {
             Some(tx) => tx,
-            None => return false,
+            None => {
+                self.metrics.stop_operation(OperationType::Remove);
+                return false;
+            }
         };
 
         let tx = &pooled_tx.transaction;
@@ -722,6 +802,11 @@ impl TransactionPool {
                 + sender_entry_size,
         );
 
+        // Update metrics
+        self.metrics.update_memory_usage(self.memory_usage);
+        self.metrics.update_transaction_count(self.txs.len());
+        self.metrics.record_transaction_removed();
+
         // Remove from sender index
         if let Some(sender_txs) = self.by_address.get_mut(&tx.sender) {
             sender_txs.remove(hash);
@@ -734,6 +819,7 @@ impl TransactionPool {
         // Instead, we'll filter them out when selecting transactions
         // This avoids O(n) removal cost from the heap
 
+        self.metrics.stop_operation(OperationType::Remove);
         true
     }
 
@@ -747,26 +833,30 @@ impl TransactionPool {
     /// # Returns
     /// Number of transactions removed during optimization
     pub fn optimize_memory(&mut self) -> usize {
+        self.metrics.start_operation(OperationType::Optimize);
+
         // Si estamos por encima del 75% del límite, optimizar
         if self.memory_usage <= (self.config.max_memory * 3 / 4) {
+            self.metrics.stop_operation(OperationType::Optimize);
             return 0;
         }
-    
+
         // Calculate how much memory to free
         // Target: reduce to 60% of max memory
         let target_memory = self.config.max_memory * 6 / 10;
         let memory_to_free = self.memory_usage.saturating_sub(target_memory);
-    
+
         // If nothing to free, return early
         if memory_to_free == 0 {
+            self.metrics.stop_operation(OperationType::Optimize);
             return 0;
         }
-    
+
         debug!(
             "Memory usage ({} bytes) exceeds target, optimizing pool",
             self.memory_usage
         );
-    
+
         // Forzar la eliminación de al menos una transacción para pruebas
         let tx_count_to_remove = if self.txs.len() > 0 {
             let avg_tx_size = if self.txs.is_empty() {
@@ -774,20 +864,23 @@ impl TransactionPool {
             } else {
                 self.memory_usage / self.txs.len()
             };
-            
+
             // Calcular cuántas transacciones eliminar y garantizar mínimo 1
             (memory_to_free / avg_tx_size).max(1)
         } else {
             0
         };
-        
+
         debug!(
             "Removing approximately {} transactions to free memory",
             tx_count_to_remove
         );
-    
+
         // Remove the lowest-priority transactions
-        self.remove_lowest_priority_transactions(tx_count_to_remove)
+        let removed = self.remove_lowest_priority_transactions(tx_count_to_remove);
+
+        self.metrics.stop_operation(OperationType::Optimize);
+        removed
     }
 
     /// Remove lowest priority transactions from the pool
@@ -801,22 +894,26 @@ impl TransactionPool {
         if self.txs.is_empty() || count == 0 {
             return 0;
         }
-    
+
         // Debug information to help diagnose
         debug!(
             "Starting removal: {} txs in pool, {} entries in by_fee",
             self.txs.len(),
             self.by_fee.len()
         );
-    
+
         // Si by_fee está vacío o desincronizado, reconstruirlo
         if self.by_fee.len() != self.txs.len() {
             self.by_fee.clear();
             for (hash, pooled_tx) in &self.txs {
                 let tx = &pooled_tx.transaction;
                 let tx_size = tx.estimate_size() as u64;
-                let fee_per_byte = if tx_size > 0 { tx.fee / tx_size } else { tx.fee };
-                
+                let fee_per_byte = if tx_size > 0 {
+                    tx.fee / tx_size
+                } else {
+                    tx.fee
+                };
+
                 self.by_fee.push(TransactionWithFee {
                     tx_hash: *hash,
                     fee: tx.fee,
@@ -826,17 +923,17 @@ impl TransactionPool {
             }
             debug!("Rebuilt by_fee index with {} entries", self.by_fee.len());
         }
-    
+
         // Create a copy of by_fee in vector form so we can sort
         let mut fee_entries: Vec<TransactionWithFee> = self.by_fee.iter().cloned().collect();
-    
+
         // Sort by fee per byte (ascending) so lowest fee transactions are first
         fee_entries.sort_by(|a, b| {
             a.fee_per_byte
                 .cmp(&b.fee_per_byte)
                 .then_with(|| b.timestamp.cmp(&a.timestamp)) // Older first when fees are equal
         });
-    
+
         // Si aún así no hay nada que eliminar, eliminar al menos una transacción
         if fee_entries.is_empty() && !self.txs.is_empty() {
             let hash = *self.txs.keys().next().unwrap();
@@ -845,24 +942,24 @@ impl TransactionPool {
                 return 1;
             }
         }
-    
+
         // Take the lowest fee transactions up to count
         let to_remove: Vec<_> = fee_entries
             .into_iter()
             .take(count)
             .map(|entry| entry.tx_hash)
             .collect();
-    
+
         // Keep track of how many we actually removed
         let mut removed = 0;
-    
+
         // Remove the selected transactions
         for hash in to_remove {
             if self.remove_transaction(&hash) {
                 removed += 1;
             }
         }
-    
+
         // Si aún no se ha eliminado nada pero hay transacciones, forzar la eliminación
         if removed == 0 && !self.txs.is_empty() {
             let hash = *self.txs.keys().next().unwrap();
@@ -871,7 +968,7 @@ impl TransactionPool {
                 debug!("Forced removal of one transaction as fallback");
             }
         }
-    
+
         debug!("Memory optimization removed {} transactions", removed);
         removed
     }
@@ -888,6 +985,8 @@ impl TransactionPool {
     /// # Returns
     /// Number of transactions removed during maintenance
     pub fn perform_maintenance(&mut self) -> usize {
+        self.metrics.start_operation(OperationType::Maintenance);
+
         let mut removed = 0;
 
         // Remove expired transactions
@@ -912,6 +1011,8 @@ impl TransactionPool {
                 self.by_fee.push(entry);
             }
         }
+
+        self.metrics.stop_operation(OperationType::Maintenance);
 
         removed
     }
@@ -947,6 +1048,8 @@ impl TransactionPool {
     /// # Parameters
     /// * `state` - Current blockchain state
     pub fn revalidate_transactions(&mut self, state: &mut BlockchainState) {
+        self.metrics.start_operation(OperationType::Revalidate);
+
         for (tx_hash, pooled_tx) in self.txs.iter_mut() {
             let tx = &pooled_tx.transaction;
 
@@ -970,5 +1073,22 @@ impl TransactionPool {
                 );
             }
         }
+
+        self.metrics.stop_operation(OperationType::Revalidate);
+    }
+
+    /// Get metrics collector
+    pub fn metrics(&self) -> &MetricsCollector {
+        &self.metrics
+    }
+
+    /// Get mutable reference to metrics collector
+    pub fn metrics_mut(&mut self) -> &mut MetricsCollector {
+        &mut self.metrics
+    }
+
+    /// Get a performance report
+    pub fn generate_metrics_report(&self) -> String {
+        self.metrics.generate_report()
     }
 }

@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         min_fee_per_byte: 1,
     };
     
-    let  pool = TransactionPool::with_config(config);
+    let mut pool = TransactionPool::with_config(config);
     println!("Transaction pool created");
     
     // Create a blockchain state for testing

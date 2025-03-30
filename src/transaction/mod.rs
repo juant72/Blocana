@@ -32,6 +32,7 @@ pub struct Transaction {
 }
 
 pub mod pool;
+pub mod metrics;  // Make the metrics module public
 
 impl Transaction {
     /// Create a new unsigned transaction
