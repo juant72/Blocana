@@ -33,6 +33,7 @@ pub struct Transaction {
 
 pub mod pool;
 pub mod metrics;  // Make the metrics module public
+pub mod error;
 
 impl Transaction {
     /// Create a new unsigned transaction
