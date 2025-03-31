@@ -94,3 +94,7 @@ path = "examples/blockchain_test.rs"
 [[example]]
 name = "transaction_pool"
 path = "examples/transaction_pool.rs"
+
+[[example]]
+name = "detailed_transaction_errors"
+path = "examples/detailed_transaction_errors.rs"
