@@ -207,6 +207,7 @@ fn test_memory_tracking() {
         max_size: 100,
         min_fee_per_byte: 0,
         expiry_time: 3600,
+        replacement_fee_bump: 10, // Default or desired value for fee bump percentage
     };
     
     let mut pool = TransactionPool::with_config(config);

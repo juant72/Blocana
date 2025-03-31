@@ -1,7 +1,7 @@
 //! Transaction pool for managing pending transactions
 
 use crate::state::BlockchainState;
-use crate::transaction::metrics::{ MetricsCollector, OperationType};
+use crate::transaction::metrics::{MetricsCollector, OperationType};
 use crate::transaction::Transaction;
 use crate::types::{Hash, PublicKeyBytes};
 use crate::Error;
@@ -21,6 +21,8 @@ pub struct TransactionPoolConfig {
     pub max_memory: usize,
     /// Minimum fee per byte for acceptance
     pub min_fee_per_byte: u64,
+    /// Minimum fee increase percentage for replacements (e.g., 10 = 10% increase required)
+    pub replacement_fee_bump: u64,
 }
 
 impl Default for TransactionPoolConfig {
@@ -30,6 +32,7 @@ impl Default for TransactionPoolConfig {
             expiry_time: 3600,            // 1 hour
             max_memory: 32 * 1024 * 1024, // 32 MB
             min_fee_per_byte: 1,
+            replacement_fee_bump: 10, // Require 10% fee increase for replacements
         }
     }
 }
@@ -168,18 +171,23 @@ impl TransactionPool {
         tx_size + pooled_tx_overhead + hash_map_entry_size + by_fee_entry_size + sender_entry_size
     }
 
-    /// Add a transaction to the pool
+    /// Add a transaction to the pool, supporting replacement of existing transactions
+    ///
+    /// This method allows replacing an existing transaction with the same sender/nonce
+    /// if the new transaction has a sufficiently higher fee.
     ///
     /// # Parameters
     /// * `tx` - The transaction to add
     /// * `state` - Current blockchain state (for validation)
+    /// * `allow_replacement` - Whether to allow replacing existing transactions
     ///
     /// # Returns
     /// `Ok(hash)` if transaction was added successfully, `Err` otherwise
-    pub fn add_transaction(
+    pub fn add_transaction_with_replacement(
         &mut self,
         tx: Transaction,
         state: &mut BlockchainState,
+        allow_replacement: bool,
     ) -> Result<Hash, Error> {
         // Start metrics for this operation
         self.metrics.start_operation(OperationType::Add);
@@ -191,8 +199,10 @@ impl TransactionPool {
         // Verify transaction signature
         tx.verify()?;
 
-        // Check for duplicate
+        // Calculate hash
         let tx_hash = tx.hash();
+
+        // Check for duplicate - but if replacement is allowed, we'll check differently
         if self.txs.contains_key(&tx_hash) {
             self.metrics.record_transaction_rejected();
             self.metrics.stop_operation(OperationType::Validate);
@@ -202,6 +212,26 @@ impl TransactionPool {
 
         // Get current account state
         let sender_state = state.get_account_state(&tx.sender);
+
+        // Comprobar primero si existe una transacción con el mismo remitente y nonce
+        let existing_tx = self.find_transaction_by_sender_and_nonce(&tx.sender, tx.nonce);
+        if existing_tx.is_some() {
+            // Ya existe una transacción con este remitente y nonce
+            if allow_replacement {
+                // Si se permite el reemplazo, procesarlo
+                let existing_tx = existing_tx.unwrap();
+                self.metrics.stop_operation(OperationType::Validate);
+                return self.process_replacement_transaction(tx, existing_tx.hash(), state);
+            } else {
+                // No se permite el reemplazo
+                self.metrics.record_transaction_rejected();
+                self.metrics.stop_operation(OperationType::Validate);
+                self.metrics.stop_operation(OperationType::Add);
+                return Err(Error::Validation(
+                    "Transaction with this nonce already exists".into(),
+                ));
+            }
+        }
 
         // Validate nonce
         if tx.nonce != sender_state.nonce {
@@ -226,7 +256,7 @@ impl TransactionPool {
             )));
         }
 
-        // Calculate fee per byte
+        // Calculate fee per byte for metrics
         let tx_size = tx.estimate_size();
         let tx_size_u64 = tx_size as u64;
         let fee_per_byte = if tx_size_u64 > 0 {
@@ -254,6 +284,7 @@ impl TransactionPool {
         self.metrics.stop_operation(OperationType::Validate);
         let validation_time = process_start.elapsed().as_micros() as u64;
 
+        // Continue with the regular transaction addition process
         // Check if pool is at capacity
         if self.txs.len() >= self.config.max_size {
             // If we're at capacity, check if this transaction has higher fee than lowest
@@ -372,25 +403,172 @@ impl TransactionPool {
         Ok(tx_hash)
     }
 
-    pub fn get_current_time(&self) -> Instant {
-        Instant::now()
-    }
-
-    pub fn get_lowest_fee_transaction(&self) -> Option<&Transaction> {
-        // Get the transaction with the lowest fee from the by_fee vector
-        self.by_fee
-            .iter()
-            .min_by_key(|tx| tx.fee_per_byte)
-            .and_then(|tx_with_fee| self.txs.get(&tx_with_fee.tx_hash))
-            .map(|pooled_tx| &pooled_tx.transaction)
-    }
-
-    /// Get current memory usage of the transaction pool
+    /// Process a transaction that is replacing an existing one
+    ///
+    /// This method handles the logic for replacing a transaction that is already in the pool.
+    ///
+    /// # Parameters
+    /// * `new_tx` - The new transaction that is replacing an existing one
+    /// * `existing_hash` - Hash of the existing transaction to be replaced
+    /// * `state` - Current blockchain state for validation
     ///
     /// # Returns
-    /// Memory usage in bytes
-    pub fn memory_usage(&self) -> usize {
-        self.memory_usage
+    /// Ok(hash) if the replacement was successful, Error otherwise
+    fn process_replacement_transaction(
+        &mut self,
+        new_tx: Transaction,
+        existing_hash: Hash,
+        _state: &mut BlockchainState,
+    ) -> Result<Hash, Error> {
+        // Get the existing transaction
+        let existing_tx = match self.get_transaction(&existing_hash) {
+            Some(tx) => tx,
+            None => {
+                // This shouldn't happen since we already found it above
+                return Err(Error::Validation("Existing transaction not found".into()));
+            }
+        };
+
+        // Calculate fee for both transactions
+        let new_fee = new_tx.fee;
+        let existing_fee = existing_tx.fee;
+
+        // Calculate the minimum required fee increase (percentage-based)
+        let min_fee = existing_fee.saturating_add(
+            existing_fee
+                .checked_mul(self.config.replacement_fee_bump)
+                .unwrap_or(u64::MAX)
+                / 100,
+        );
+
+        // Check if the new transaction has enough fee increase
+        if new_fee < min_fee {
+            self.metrics.record_transaction_rejected();
+            return Err(Error::Validation(format!(
+                "Replacement fee too low: got {}, need at least {}",
+                new_fee, min_fee
+            )));
+        }
+
+        // The new transaction has a sufficient fee increase, remove the old one
+        // before adding the new one
+        let removed = self.remove_transaction(&existing_hash);
+        if !removed {
+            // This shouldn't happen since we already found the transaction
+            return Err(Error::Validation(
+                "Failed to remove existing transaction during replacement".into(),
+            ));
+        }
+
+        debug!(
+            "Replaced transaction {} with higher fee version",
+            hex::encode(&existing_hash[0..4])
+        );
+
+        // Now add the new transaction using the regular process
+        // We need to adjust the transaction to use the current expected nonce
+        let new_tx_hash = new_tx.hash();
+        let tx_size = new_tx.estimate_size();
+        let tx_size_u64 = tx_size as u64;
+        let fee_per_byte = if tx_size_u64 > 0 {
+            new_tx.fee / tx_size_u64
+        } else {
+            new_tx.fee
+        };
+
+        // Create pooled transaction
+        let pooled_tx = PooledTransaction {
+            transaction: new_tx.clone(),
+            added_time: self.get_current_time(),
+            is_valid: true,
+            size: tx_size,
+        };
+
+        // Create fee record for priority
+        let tx_with_fee = TransactionWithFee {
+            tx_hash: new_tx_hash,
+            fee: new_tx.fee,
+            fee_per_byte,
+            timestamp: pooled_tx.added_time,
+        };
+
+        // Update memory usage before adding
+        self.memory_usage += tx_size;
+        self.metrics.update_memory_usage(self.memory_usage);
+
+        // Check memory limit and optimize if needed
+        if self.memory_usage > self.config.max_memory {
+            self.optimize_memory();
+
+            // If still over limit, reject the transaction
+            if self.memory_usage > self.config.max_memory {
+                self.memory_usage -= tx_size;
+                self.metrics.update_memory_usage(self.memory_usage);
+                self.metrics.record_transaction_rejected();
+                return Err(Error::Validation(
+                    "Memory limit reached, cannot replace transaction".into(),
+                ));
+            }
+        }
+
+        // Add to primary index
+        self.txs.insert(new_tx_hash, pooled_tx);
+
+        // Add to fee index
+        self.by_fee.push(tx_with_fee);
+
+        // Add to sender index
+        self.by_address
+            .entry(new_tx.sender)
+            .or_insert_with(HashSet::new)
+            .insert(new_tx_hash);
+
+        // Update metrics
+        self.metrics.update_transaction_count(self.txs.len());
+
+        Ok(new_tx_hash)
+    }
+
+    /// Find a transaction with the specified sender and nonce
+    ///
+    /// # Parameters
+    /// * `sender` - The transaction sender
+    /// * `nonce` - The transaction nonce
+    ///
+    /// # Returns
+    /// The transaction if found, None otherwise
+    pub fn find_transaction_by_sender_and_nonce(
+        &self,
+        sender: &PublicKeyBytes,
+        nonce: u64,
+    ) -> Option<Transaction> {
+        // Get all transactions from this sender
+        if let Some(tx_hashes) = self.by_address.get(sender) {
+            for hash in tx_hashes {
+                if let Some(pooled_tx) = self.txs.get(hash) {
+                    if pooled_tx.transaction.nonce == nonce {
+                        return Some(pooled_tx.transaction.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Add a transaction to the pool (wrapper for backward compatibility)
+    ///
+    /// # Parameters
+    /// * `tx` - The transaction to add
+    /// * `state` - Current blockchain state (for validation)
+    ///
+    /// # Returns
+    /// `Ok(hash)` if transaction was added successfully, `Err` otherwise
+    pub fn add_transaction(
+        &mut self,
+        tx: Transaction,
+        state: &mut BlockchainState,
+    ) -> Result<Hash, Error> {
+        self.add_transaction_with_replacement(tx, state, false)
     }
 
     /// Add multiple transactions to the pool in a batch operation
@@ -1090,5 +1268,26 @@ impl TransactionPool {
     /// Get a performance report
     pub fn generate_metrics_report(&self) -> String {
         self.metrics.generate_report()
+    }
+
+    pub fn get_current_time(&self) -> Instant {
+        Instant::now()
+    }
+
+    pub fn get_lowest_fee_transaction(&self) -> Option<&Transaction> {
+        // Get the transaction with the lowest fee from the by_fee vector
+        self.by_fee
+            .iter()
+            .min_by_key(|tx| tx.fee_per_byte)
+            .and_then(|tx_with_fee| self.txs.get(&tx_with_fee.tx_hash))
+            .map(|pooled_tx| &pooled_tx.transaction)
+    }
+
+    /// Get current memory usage of the transaction pool
+    ///
+    /// # Returns
+    /// Memory usage in bytes
+    pub fn memory_usage(&self) -> usize {
+        self.memory_usage
     }
 }

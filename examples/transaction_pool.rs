@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         expiry_time: 300, // 5 minutes
         max_memory: 10 * 1024 * 1024, // 10 MB
         min_fee_per_byte: 1,
+        replacement_fee_bump: 10, // 10% fee bump for replacements
     };
     
     let mut pool = TransactionPool::with_config(config);
