@@ -10,7 +10,9 @@ use blocana::{
     state::BlockchainState,
     transaction::{Transaction, pool::{TransactionPool, TransactionPoolConfig}},
     transaction::error::TransactionError,
+    Error,
 };
+
 
 // Extension trait to add error classification methods
 trait TransactionErrorExt {
@@ -22,49 +24,66 @@ trait TransactionErrorExt {
     fn log_context(&self) -> String;
 }
 
-impl TransactionErrorExt for blocana::transaction::pool::TransactionError {
+// Implementar el trait para Error en lugar de para TransactionError
+impl TransactionErrorExt for Error {
     fn is_balance_error(&self) -> bool {
-        matches!(self, blocana::transaction::pool::TransactionError::InsufficientBalance { .. })
+        if let Error::Validation(msg) = self {
+            msg.contains("Insufficient balance")
+        } else {
+            false
+        }
     }
     
     fn is_nonce_error(&self) -> bool {
-        matches!(self, blocana::transaction::pool::TransactionError::InvalidNonce { .. })
+        if let Error::Validation(msg) = self {
+            msg.contains("Invalid nonce")
+        } else {
+            false
+        }
     }
     
     fn is_fee_error(&self) -> bool {
-        matches!(self, blocana::transaction::pool::TransactionError::FeeTooLow { .. })
+        if let Error::Validation(msg) = self {
+            msg.contains("Fee too low")
+        } else {
+            false
+        }
     }
     
     fn expected_nonce(&self) -> Option<u64> {
-        if let blocana::transaction::pool::TransactionError::InvalidNonce { expected, .. } = self {
-            Some(*expected)
-        } else {
-            None
+        if let Error::Validation(msg) = self {
+            if msg.contains("Invalid nonce: expected ") {
+                // Try to extract the nonce from error message
+                let parts: Vec<&str> = msg.split("expected ").collect();
+                if parts.len() > 1 {
+                    let nonce_part = parts[1].split(',').next()?;
+                    return nonce_part.parse::<u64>().ok();
+                }
+            }
         }
+        None
     }
     
     fn minimum_required_fee(&self) -> Option<u64> {
-        // Fix: Use the correct field name from the FeeTooLow variant
-        if let blocana::transaction::pool::TransactionError::FeeTooLow { min_required, .. } = self {
-            Some(*min_required)
-        } else {
-            None
+        if let Error::Validation(msg) = self {
+            if msg.contains("Fee too low") {
+                // Extract minimum fee from error message
+                let parts: Vec<&str> = msg.split("minimum is ").collect();
+                if parts.len() > 1 {
+                    let fee_str = parts[1];
+                    return fee_str.parse::<u64>().ok();
+                }
+            }
         }
+        None
     }
     
     fn log_context(&self) -> String {
-        match self {
-            blocana::transaction::pool::TransactionError::InsufficientBalance { sender, balance, required } => 
-                format!("Insufficient balance for {:?}: has {}, needs {}", sender, balance, required),
-            _ => format!("{}", self)
-        }
+        format!("Error details: {}", self)
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Import our extension trait
-    use crate::TransactionErrorExt;
-    
     // Initialize logging
     env_logger::init();
     println!("Detailed Transaction Error Handling Example");
@@ -154,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         min_fee_per_byte: 5, // 5 units per byte minimum
         ..Default::default()
     };
-    let mut pool_with_fee = TransactionPool::with_config(config);
+    let pool_with_fee = TransactionPool::with_config(config);
     
     // Create transaction with insufficient fee
     let data = vec![0u8; 100]; // 100 bytes of data
@@ -194,7 +213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demonstrate using the original API with the new error handling internally
     println!("\n4. Using Original API (with enhanced errors internally)");
     
-    match pool_with_fee.verify_transaction(&tx1, &mut state) {
+    match pool.add_transaction(tx1.clone(), &mut state) {
         Ok(_) => println!("Transaction added successfully (unexpected)"),
         Err(e) => println!("Standard error: {}", e),
     }

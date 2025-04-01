@@ -1481,7 +1481,7 @@ impl TransactionPool {
     /// 
     /// This method provides the same functionality as `add_transaction` but
     /// returns more detailed error information through the `TransactionError` type.
-    pub fn verify_transaction(&self, tx: &Transaction, state: &mut BlockchainState) 
+    pub fn verify_transaction_2(&self, tx: &Transaction, state: &mut BlockchainState) 
         -> TxResult<()> 
     {
         // Since self is immutable, we can't modify metrics directly
@@ -1541,5 +1541,55 @@ impl TransactionPool {
             
             Ok(tx_hash)
         }
+    }
+    
+    /// Verifies a transaction against the current state without adding it to the pool
+    /// 
+    /// This method performs all the same validations as add_transaction but
+    /// doesn't actually modify the pool.
+    pub fn verify_transaction(
+        &self,
+        tx: &Transaction,
+        state: &mut BlockchainState
+    ) -> Result<(), crate::Error> {
+        // Verify the transaction
+        tx.verify()?;
+        
+        // Calculate total cost (amount + fee)
+        let total_cost = tx.amount + tx.fee;
+        
+        // Check sender balance
+        let sender_state = state.get_account_state(&tx.sender);
+        if sender_state.balance < total_cost {
+            return Err(crate::Error::Validation(format!(
+                "Insufficient balance: {} < {}",
+                sender_state.balance, total_cost
+            )));
+        }
+        
+        // Validate nonce
+        if tx.nonce != sender_state.nonce {
+            return Err(crate::Error::Validation(format!(
+                "Invalid nonce: expected {}, got {}",
+                sender_state.nonce, tx.nonce
+            )));
+        }
+        
+        // Validar tarifa mínima
+        let tx_size = tx.estimate_size() as u64;
+        let fee_per_byte = if tx_size > 0 {
+            tx.fee / tx_size
+        } else {
+            tx.fee
+        };
+
+        if fee_per_byte < self.config.min_fee_per_byte {
+            return Err(crate::Error::Validation(format!(
+                "Fee too low: {} per byte, minimum is {}",
+                fee_per_byte, self.config.min_fee_per_byte
+            )));
+        }
+        
+        Ok(())
     }
 }
