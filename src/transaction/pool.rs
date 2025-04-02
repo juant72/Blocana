@@ -17,9 +17,7 @@ pub type TxResult<T> = Result<T, TransactionError>;
 #[derive(Debug)]
 pub enum TransactionError {
     /// Transaction already exists in the pool
-    AlreadyExists {
-        tx_hash: Hash,
-    },
+    AlreadyExists { tx_hash: Hash },
     /// Transaction has an invalid signature
     InvalidSignature,
     /// Transaction nonce doesn't match account state
@@ -34,10 +32,7 @@ pub enum TransactionError {
         min_required: u64,
     },
     /// Transaction replacement fee is too low
-    ReplacementFeeTooLow {
-        actual: u64,
-        required: u64,
-    },
+    ReplacementFeeTooLow { actual: u64, required: u64 },
     /// Account has insufficient balance
     InsufficientBalance {
         sender: PublicKeyBytes,
@@ -62,24 +57,56 @@ impl TransactionError {
     /// Get additional context for logging purposes
     pub fn log_context(&self) -> String {
         match self {
-            Self::AlreadyExists { tx_hash } => 
-                format!("Transaction already exists with hash: {}", hex::encode(&tx_hash[0..4])),
-            Self::InvalidSignature => 
-                "Transaction has an invalid signature".to_string(),
-            Self::InvalidNonce { sender, expected, actual } => 
-                format!("Invalid nonce for {}: expected {}, got {}", 
-                    hex::encode(&sender[0..4]), expected, actual),
-            Self::FeeTooLow { fee_per_byte, min_required } => 
-                format!("Fee too low: {} per byte, minimum is {}", fee_per_byte, min_required),
-            Self::ReplacementFeeTooLow { actual, required } => 
-                format!("Replacement fee too low: {} provided, {} required", actual, required),
-            Self::InsufficientBalance { sender, balance, required } => 
-                format!("Insufficient balance for {}: has {}, needs {}", 
-                    hex::encode(&sender[0..4]), balance, required),
-            Self::PoolFull { current_size, max_size } => 
-                format!("Transaction pool full: {} of {} slots used", current_size, max_size),
-            Self::MemoryLimitReached { current_bytes, max_bytes } => 
-                format!("Memory limit reached: {} of {} bytes used", current_bytes, max_bytes),
+            Self::AlreadyExists { tx_hash } => format!(
+                "Transaction already exists with hash: {}",
+                hex::encode(&tx_hash[0..4])
+            ),
+            Self::InvalidSignature => "Transaction has an invalid signature".to_string(),
+            Self::InvalidNonce {
+                sender,
+                expected,
+                actual,
+            } => format!(
+                "Invalid nonce for {}: expected {}, got {}",
+                hex::encode(&sender[0..4]),
+                expected,
+                actual
+            ),
+            Self::FeeTooLow {
+                fee_per_byte,
+                min_required,
+            } => format!(
+                "Fee too low: {} per byte, minimum is {}",
+                fee_per_byte, min_required
+            ),
+            Self::ReplacementFeeTooLow { actual, required } => format!(
+                "Replacement fee too low: {} provided, {} required",
+                actual, required
+            ),
+            Self::InsufficientBalance {
+                sender,
+                balance,
+                required,
+            } => format!(
+                "Insufficient balance for {}: has {}, needs {}",
+                hex::encode(&sender[0..4]),
+                balance,
+                required
+            ),
+            Self::PoolFull {
+                current_size,
+                max_size,
+            } => format!(
+                "Transaction pool full: {} of {} slots used",
+                current_size, max_size
+            ),
+            Self::MemoryLimitReached {
+                current_bytes,
+                max_bytes,
+            } => format!(
+                "Memory limit reached: {} of {} bytes used",
+                current_bytes, max_bytes
+            ),
             Self::Other(msg) => format!("Other error: {}", msg),
         }
     }
@@ -106,24 +133,45 @@ impl std::error::Error for TransactionError {}
 impl From<TransactionError> for Error {
     fn from(error: TransactionError) -> Self {
         match error {
-            TransactionError::AlreadyExists { .. } => 
-                Error::Validation("Transaction already in pool".into()),
-            TransactionError::InvalidSignature => 
-                Error::Validation("Invalid transaction signature".into()),
-            TransactionError::InvalidNonce { expected, actual, .. } => 
-                Error::Validation(format!("Invalid nonce: expected {}, got {}", expected, actual)),
-            TransactionError::FeeTooLow { fee_per_byte, min_required, .. } => 
-                Error::Validation(format!("Fee too low: {} per byte, minimum is {}", fee_per_byte, min_required)),
-            TransactionError::ReplacementFeeTooLow { actual, required } => 
-                Error::Validation(format!("Replacement fee too low: {} provided, {} required", actual, required)),
-            TransactionError::InsufficientBalance { balance, required, .. } => 
-                Error::Validation(format!("Insufficient balance: has {}, needs {}", balance, required)),
-            TransactionError::PoolFull { .. } => 
-                Error::Validation("Transaction pool is full".into()),
-            TransactionError::MemoryLimitReached { .. } => 
-                Error::Validation("Memory limit reached".into()),
-            TransactionError::Other(msg) => 
-                Error::Validation(msg),
+            TransactionError::AlreadyExists { .. } => {
+                Error::Validation("Transaction already in pool".into())
+            }
+            TransactionError::InvalidSignature => {
+                Error::Validation("Invalid transaction signature".into())
+            }
+            TransactionError::InvalidNonce {
+                expected, actual, ..
+            } => Error::Validation(format!(
+                "Invalid nonce: expected {}, got {}",
+                expected, actual
+            )),
+            TransactionError::FeeTooLow {
+                fee_per_byte,
+                min_required,
+                ..
+            } => Error::Validation(format!(
+                "Fee too low: {} per byte, minimum is {}",
+                fee_per_byte, min_required
+            )),
+            TransactionError::ReplacementFeeTooLow { actual, required } => {
+                Error::Validation(format!(
+                    "Replacement fee too low: {} provided, {} required",
+                    actual, required
+                ))
+            }
+            TransactionError::InsufficientBalance {
+                balance, required, ..
+            } => Error::Validation(format!(
+                "Insufficient balance: has {}, needs {}",
+                balance, required
+            )),
+            TransactionError::PoolFull { .. } => {
+                Error::Validation("Transaction pool is full".into())
+            }
+            TransactionError::MemoryLimitReached { .. } => {
+                Error::Validation("Memory limit reached".into())
+            }
+            TransactionError::Other(msg) => Error::Validation(msg),
         }
     }
 }
@@ -686,7 +734,119 @@ impl TransactionPool {
         tx: Transaction,
         state: &mut BlockchainState,
     ) -> Result<Hash, Error> {
-        self.add_transaction_with_replacement(tx, state, false)
+        self.metrics.start_operation(OperationType::Add);
+        let process_start = Instant::now();
+
+        // Validate using the detailed error system internally
+        match self.validate_transaction_internal(&tx, state) {
+            Ok(_) => {}
+            Err(e) => {
+                // Log with enhanced context
+                debug!("Transaction rejected: {}", e.log_context());
+
+                self.metrics.record_transaction_rejected();
+                self.metrics.stop_operation(OperationType::Add);
+
+                // Convert to the general error type for API compatibility
+                return Err(e.into());
+            }
+        }
+
+        // Calcular hash y métricas
+        let tx_hash = tx.hash();
+        let tx_size = tx.estimate_size();
+        let fee_per_byte = if tx_size > 0 {
+            tx.fee / (tx_size as u64)
+        } else {
+            tx.fee
+        };
+
+        // Record fee metrics
+        self.metrics
+            .record_transaction_fee(fee_per_byte as f64, tx_size);
+
+        // Create pooled transaction
+        let pooled_tx = PooledTransaction {
+            transaction: tx.clone(),
+            added_time: self.get_current_time(),
+            is_valid: true,
+            size: tx_size,
+        };
+
+        // Create fee record for priority
+        let tx_with_fee = TransactionWithFee {
+            tx_hash,
+            fee: tx.fee,
+            fee_per_byte,
+            timestamp: pooled_tx.added_time,
+        };
+
+        // Update memory usage
+        self.memory_usage += self.calculate_transaction_memory_usage(&tx);
+        self.metrics.update_memory_usage(self.memory_usage);
+
+        // Check memory optimization need
+        if self.memory_usage > (self.config.max_memory * 3 / 4) {
+            let removed = self.optimize_memory();
+            if removed == 0 && self.memory_usage > self.config.max_memory {
+                // If we couldn't optimize and are over limit, reject
+                self.metrics.record_transaction_rejected();
+                self.metrics.stop_operation(OperationType::Add);
+                return Err(Error::Validation("Memory limit reached".into()));
+            }
+        }
+
+        // Si el pool está lleno, eliminar la transacción con la tarifa más baja
+        if self.txs.len() >= self.config.max_size {
+            if let Some(lowest) = self
+                .by_fee
+                .iter()
+                .min_by(|a, b| a.fee_per_byte.cmp(&b.fee_per_byte))
+            {
+                // Solo si la nueva transacción tiene una tarifa más alta
+                if fee_per_byte > lowest.fee_per_byte {
+                    debug!(
+                        "Pool lleno: reemplazando tx {} (tarifa: {}) con nueva tx (tarifa: {})",
+                        hex::encode(&lowest.tx_hash[0..4]),
+                        lowest.fee_per_byte,
+                        fee_per_byte
+                    );
+
+                    // Clone the hash before ending the immutable borrow
+                    let hash_to_remove = lowest.tx_hash;
+                    
+                    // Eliminar la transacción con la tarifa más baja
+                    self.remove_transaction(&hash_to_remove);
+                }
+            }
+        }
+
+        // Add to primary index
+        self.txs.insert(tx_hash, pooled_tx);
+
+        // Add to fee index
+        self.by_fee.push(tx_with_fee);
+
+        // Add to sender index
+        self.by_address
+            .entry(tx.sender)
+            .or_insert_with(HashSet::new)
+            .insert(tx_hash);
+
+        // Update transaction count metrics
+        self.metrics.update_transaction_count(self.txs.len());
+
+        // Record successful addition
+        let processing_time = process_start.elapsed().as_micros() as u64;
+        let validation_time = 0; // No relevante aquí, ya procesado en validate_transaction_internal
+        self.metrics
+            .record_transaction_added(processing_time, validation_time);
+
+        // End operation timing
+        self.metrics.stop_operation(OperationType::Add);
+
+        debug!("Added transaction to pool: {}", hex::encode(&tx_hash[0..4]));
+        Ok(tx_hash)
     }
 
     /// Add multiple transactions to the pool in a batch operation
@@ -1038,7 +1198,7 @@ impl TransactionPool {
     }
 
     /// Validate a transaction before adding to pool
-    fn validate_transaction(&self, tx: &Transaction) -> Result<(), PoolError> {
+    fn validate_transaction_basic(&self, tx: &Transaction) -> Result<(), PoolError> {
         // Validate signature
         if tx.verify().is_err() {
             return Err(PoolError::InvalidSignature);
@@ -1410,23 +1570,32 @@ impl TransactionPool {
     }
 
     /// Validate a transaction and create rich error information (internal helper)
-    fn validate_transaction_internal(&self, tx: &Transaction, state: &mut BlockchainState) -> TxResult<()> {
+    fn validate_transaction_internal(
+        &self,
+        tx: &Transaction,
+        state: &mut BlockchainState,
+    ) -> TxResult<()> {
         // Step 1: Check if transaction already exists
         let tx_hash = tx.hash();
         if self.txs.contains_key(&tx_hash) {
-            return Err(TransactionError::AlreadyExists {
-                tx_hash,
+            return Err(TransactionError::AlreadyExists { tx_hash });
+        }
+            
+        // Step 1b: Check if there's already a transaction with the same sender and nonce
+        if let Some(existing_tx) = self.find_transaction_by_sender_and_nonce(&tx.sender, tx.nonce) {
+            return Err(TransactionError::AlreadyExists { 
+                tx_hash: existing_tx.hash() 
             });
         }
-        
+
         // Step 2: Verify transaction signature if not already done
         if let Err(_) = tx.verify() {
             return Err(TransactionError::InvalidSignature);
         }
-        
+
         // Step 3: Get account state
         let sender_state = state.get_account_state(&tx.sender);
-        
+
         // Step 4: Validate nonce
         if tx.nonce != sender_state.nonce {
             return Err(TransactionError::InvalidNonce {
@@ -1435,7 +1604,7 @@ impl TransactionPool {
                 actual: tx.nonce,
             });
         }
-        
+
         // Step 5: Validate balance
         let total_cost = tx.amount.saturating_add(tx.fee);
         if sender_state.balance < total_cost {
@@ -1445,26 +1614,48 @@ impl TransactionPool {
                 required: total_cost,
             });
         }
-        
+
         // Step 6: Validate minimum fee
         let tx_size = tx.estimate_size() as u64;
-        let fee_per_byte = if tx_size > 0 { tx.fee / tx_size } else { tx.fee };
-        
+        let fee_per_byte = if tx_size > 0 {
+            tx.fee / tx_size
+        } else {
+            tx.fee
+        };
+
         if fee_per_byte < self.config.min_fee_per_byte {
             return Err(TransactionError::FeeTooLow {
                 fee_per_byte,
                 min_required: self.config.min_fee_per_byte,
             });
         }
-        
-        // Step 7: Validate pool constraints
+
+        // Step 7: Check pool size limit - MODIFICAR AQUÍ
         if self.txs.len() >= self.config.max_size {
+            // Si el pool está lleno, verificar si esta transacción tiene una tarifa más alta
+            // que alguna ya existente
+            let tx_fee_per_byte = fee_per_byte; // La tarifa de la nueva transacción
+
+            // Buscar la transacción con la tarifa más baja en el pool
+            if let Some(lowest) = self
+                .by_fee
+                .iter()
+                .min_by(|a, b| a.fee_per_byte.cmp(&b.fee_per_byte))
+            {
+                // Si la nueva transacción tiene una tarifa más alta que la más baja
+                if tx_fee_per_byte > lowest.fee_per_byte {
+                    // Esta transacción es válida y puede reemplazar a la más baja
+                    return Ok(());
+                }
+            }
+
+            // El pool está lleno y esta transacción no tiene una tarifa suficientemente alta
             return Err(TransactionError::PoolFull {
                 current_size: self.txs.len(),
                 max_size: self.config.max_size,
             });
         }
-        
+
         // Calculate memory usage of this transaction
         let tx_memory = self.calculate_transaction_memory_usage(tx);
         if self.memory_usage + tx_memory > self.config.max_memory {
@@ -1473,48 +1664,53 @@ impl TransactionPool {
                 max_bytes: self.config.max_memory,
             });
         }
-        
+
         Ok(())
     }
-    
-    /// Add a single transaction to the pool with detailed error reporting
-    /// 
-    /// This method provides the same functionality as `add_transaction` but
-    /// returns more detailed error information through the `TransactionError` type.
-    pub fn verify_transaction_2(&self, tx: &Transaction, state: &mut BlockchainState) 
-        -> TxResult<()> 
-    {
-        // Since self is immutable, we can't modify metrics directly
-        // Just validate without metrics tracking
-        self.validate_transaction_internal(tx, state)
+
+    /// Public API for validating a transaction using the detailed error system
+    pub fn validate_transaction(
+        &self,
+        tx: &Transaction,
+        state: &mut BlockchainState,
+    ) -> TxResult<()> {
+        // Since we have an immutable reference, we can't modify metrics timing
+        // We'll skip the timing operations in this case
+
+        // Obtain the validation result
+        let result = self.validate_transaction_internal(tx, state);
+
+        // Return the result
+        result
     }
-    
+
     /// Add a transaction with replacement option, using detailed error reporting
     pub fn add_transaction_with_replacement_detailed(
-        &mut self, 
-        tx: Transaction, 
+        &mut self,
+        tx: Transaction,
         state: &mut BlockchainState,
-        allow_replacement: bool
+        allow_replacement: bool,
     ) -> TxResult<Hash> {
         let tx_hash = tx.hash();
-        
+
         // Check for existing transaction with same sender and nonce
         let existing_tx = self.find_transaction_by_sender_and_nonce(&tx.sender, tx.nonce);
-        
+
         if let Some(existing_tx) = existing_tx {
             // Found existing transaction with same sender/nonce
             if !allow_replacement {
                 // If replacement not allowed, return an error
-                return Err(TransactionError::AlreadyExists { 
-                    tx_hash: existing_tx.hash() 
+                return Err(TransactionError::AlreadyExists {
+                    tx_hash: existing_tx.hash(),
                 });
             }
-            
+
             // Calculate minimum required fee for replacement
-            let min_required_fee = existing_tx.fee
+            let min_required_fee = existing_tx
+                .fee
                 .saturating_mul(100 + self.config.replacement_fee_bump)
                 .saturating_div(100);
-            
+
             // Check if new transaction has sufficient fee for replacement
             if tx.fee < min_required_fee {
                 return Err(TransactionError::ReplacementFeeTooLow {
@@ -1522,42 +1718,42 @@ impl TransactionPool {
                     required: min_required_fee,
                 });
             }
-            
+
             // Validate the new transaction (other than duplicate check)
             self.validate_transaction_internal(&tx, state)?;
-            
+
             // Remove the existing transaction
             self.remove_transaction(&existing_tx.hash());
-            
+
             // Add the new transaction (implementation left out for brevity)
-            
+
             Ok(tx_hash)
         } else {
             // No existing transaction with this sender/nonce
             // Just validate and add normally
             self.validate_transaction_internal(&tx, state)?;
-            
+
             // Implementation left out for brevity
-            
+
             Ok(tx_hash)
         }
     }
-    
+
     /// Verifies a transaction against the current state without adding it to the pool
-    /// 
+    ///
     /// This method performs all the same validations as add_transaction but
     /// doesn't actually modify the pool.
     pub fn verify_transaction(
         &self,
         tx: &Transaction,
-        state: &mut BlockchainState
+        state: &mut BlockchainState,
     ) -> Result<(), crate::Error> {
         // Verify the transaction
         tx.verify()?;
-        
+
         // Calculate total cost (amount + fee)
         let total_cost = tx.amount + tx.fee;
-        
+
         // Check sender balance
         let sender_state = state.get_account_state(&tx.sender);
         if sender_state.balance < total_cost {
@@ -1566,7 +1762,7 @@ impl TransactionPool {
                 sender_state.balance, total_cost
             )));
         }
-        
+
         // Validate nonce
         if tx.nonce != sender_state.nonce {
             return Err(crate::Error::Validation(format!(
@@ -1574,7 +1770,7 @@ impl TransactionPool {
                 sender_state.nonce, tx.nonce
             )));
         }
-        
+
         // Validar tarifa mínima
         let tx_size = tx.estimate_size() as u64;
         let fee_per_byte = if tx_size > 0 {
@@ -1589,7 +1785,7 @@ impl TransactionPool {
                 fee_per_byte, self.config.min_fee_per_byte
             )));
         }
-        
+
         Ok(())
     }
 }
